@@ -1,0 +1,14 @@
+type Query {
+  me: User
+  stats: Int
+}
+
+type Mutation {
+  """Change a nickname"""
+  setNickname(
+    userId: Int!
+    nickname: String!
+  ): User
+  updateProfile(input: ProfileInput!): User
+  ghostOperation: Boolean
+}

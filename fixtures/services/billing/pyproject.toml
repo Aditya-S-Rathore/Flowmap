@@ -1,0 +1,3 @@
+[project]
+name = "billing"
+dependencies = ["fastapi", "sqlalchemy", "celery", "stripe", "requests"]

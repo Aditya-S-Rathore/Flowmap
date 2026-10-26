@@ -1,0 +1,1 @@
+{ "name": "routers", "private": true, "dependencies": { "@angular/router": "18.0.0", "@react-navigation/native": "7.0.0", "@tanstack/react-router": "1.80.0" } }

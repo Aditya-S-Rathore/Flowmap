@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [{ "type": "command", "command": "flowmap hook stop --quiet", "timeout": 60 }]
+      }
+    ]
+  }
+}

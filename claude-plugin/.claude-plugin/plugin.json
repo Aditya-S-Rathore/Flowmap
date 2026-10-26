@@ -1,0 +1,6 @@
+{
+  "name": "flowmap",
+  "version": "0.1.0",
+  "description": "Gives Claude a code graph of your repos (screens, APIs, services, tables, external calls) and checks changes for risky patterns.",
+  "author": { "name": "FlowMap" }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "flowmap",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "node --test \"packages/*/test/**/*.test.ts\"",
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "npm run build -w @flowmap/dashboard",
+    "flowmap": "node packages/cli/bin/flowmap.js",
+    "dev": "node --watch-path=packages/core/src --watch-path=packages/plugins/src --watch-path=packages/rules/src --watch-path=packages/cli/src --watch-preserve-output packages/cli/bin/flowmap.js dev --keep-token --no-open"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@flowmap/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "tree-sitter-python": "0.25.0",
+    "ts-morph": "28.0.0",
+    "web-tree-sitter": "0.27.1"
+  }
+}

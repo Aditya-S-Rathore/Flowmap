@@ -1,0 +1,14 @@
+model User {
+  id       Int       @id
+  email    String
+  projects Project[]
+  @@map("users")
+}
+
+model Project {
+  id      Int    @id
+  name    String
+  ownerId Int
+  owner   User   @relation(fields: [ownerId], references: [id])
+  @@map("projects")
+}

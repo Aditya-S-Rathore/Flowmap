@@ -1,0 +1,135 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-subtle: #f8f8f9;
+  --bg-muted: #f1f1f3;
+  --fg: #18181b;
+  --fg-muted: #52525b;
+  --fg-subtle: #8a8a93;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --accent: #4f46e5;
+  --accent-soft: #eef2ff;
+  --error: #dc2626;
+  --error-soft: #fef2f2;
+  --warn: #b45309;
+  --warn-soft: #fffbeb;
+  --tx: #fef3c7;
+  --table: #2563eb;
+  --table-soft: #eff6ff;
+  --external: #dc2626;
+  --external-soft: #fef2f2;
+  --success: #16a34a;
+  --success-soft: #f0fdf4;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f0f11;
+  --bg-subtle: #151518;
+  --bg-muted: #1d1d21;
+  --fg: #ededef;
+  --fg-muted: #a1a1aa;
+  --fg-subtle: #71717a;
+  --border: #27272a;
+  --border-strong: #3f3f46;
+  --accent: #818cf8;
+  --accent-soft: #1e1b4b;
+  --error: #f87171;
+  --error-soft: #2a1215;
+  --warn: #fbbf24;
+  --warn-soft: #271d0a;
+  --tx: #2e2510;
+  --table: #60a5fa;
+  --table-soft: #0f1d33;
+  --external: #f87171;
+  --external-soft: #2a1215;
+  --success: #4ade80;
+  --success-soft: #0d2316;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0f0f11;
+    --bg-subtle: #151518;
+    --bg-muted: #1d1d21;
+    --fg: #ededef;
+    --fg-muted: #a1a1aa;
+    --fg-subtle: #71717a;
+    --border: #27272a;
+    --border-strong: #3f3f46;
+    --accent: #818cf8;
+    --accent-soft: #1e1b4b;
+    --error: #f87171;
+    --error-soft: #2a1215;
+    --warn: #fbbf24;
+    --warn-soft: #271d0a;
+    --tx: #2e2510;
+    --table: #60a5fa;
+    --table-soft: #0f1d33;
+    --external: #f87171;
+    --external-soft: #2a1215;
+    --success: #4ade80;
+    --success-soft: #0d2316;
+  }
+}
+
+@theme inline {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --color-bg: var(--bg);
+  --color-subtle: var(--bg-subtle);
+  --color-muted: var(--bg-muted);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-error: var(--error);
+  --color-error-soft: var(--error-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-tx: var(--tx);
+  --color-table: var(--table);
+  --color-table-soft: var(--table-soft);
+  --color-external: var(--external);
+  --color-external-soft: var(--external-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* React Flow: follow app tokens */
+.react-flow {
+  --xy-background-color: var(--bg-subtle);
+  --xy-minimap-background-color: var(--bg);
+  --xy-minimap-mask-background-color: color-mix(in srgb, var(--bg-muted) 60%, transparent);
+  --xy-controls-button-background-color: var(--bg);
+  --xy-controls-button-background-color-hover: var(--bg-muted);
+  --xy-controls-button-color: var(--fg-muted);
+  --xy-controls-button-border-color: var(--border);
+  --xy-edge-label-background-color: var(--bg);
+  --xy-edge-label-color: var(--fg-muted);
+  --xy-attribution-background-color: transparent;
+}
+.react-flow__node-card { cursor: pointer; }
+[cmdk-group-heading] {
+  @apply px-2 pt-2 pb-1 text-xs font-medium text-fg-subtle;
+}

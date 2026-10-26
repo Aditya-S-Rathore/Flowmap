@@ -1,0 +1,1 @@
+{ "name": "shop-backend", "private": true, "dependencies": { "@nestjs/core": "10.0.0", "@nestjs/graphql": "12.0.0", "typeorm": "0.3.0", "bullmq": "5.0.0", "axios": "1.0.0" } }

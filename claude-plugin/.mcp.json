@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "flowmap": { "command": "flowmap", "args": ["mcp"] }
+  }
+}

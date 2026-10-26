@@ -1,0 +1,14 @@
+{
+  "name": "flowmap",
+  "description": "Local marketplace for the FlowMap plugin.",
+  "owner": {
+    "name": "FlowMap"
+  },
+  "plugins": [
+    {
+      "name": "flowmap",
+      "source": "./claude-plugin",
+      "description": "Code graph + side-effect checks: trace screen \u2192 API \u2192 service \u2192 DB/external calls, and catch risky patterns before you finish."
+    }
+  ]
+}
