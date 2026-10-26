@@ -64,8 +64,20 @@ export default {
 };
 ```
 
-- **Frontend + backend:** put both repos in the same parent folder and add `connect: ["../my-api"]` to the frontend's config. Running FlowMap in the frontend then shows the whole flow, screen → API → database.
-- **If the connected repo is missing:** FlowMap warns and skips the cross-repo checks; nothing fails.
+**Connecting repos** (only if your app spans more than one repo, for example a frontend and a backend). Connect them to see one map from screen to database.
+
+1. Keep the repos side by side in the same parent folder:
+   ```text
+   projects/
+   ├─ my-web/    ← the repo you work in (it calls the API)
+   └─ my-api/
+   ```
+2. Set up the other repo once: `cd my-api && flowmap init`
+3. Set up your repo and connect it: `cd ../my-web && flowmap init --connect ../my-api`
+4. Run `flowmap dev` in `my-web`. The dashboard now shows screen → API → database across both repos.
+
+`--connect` just writes `connect: ["../my-api"]` into the config, a path relative to your repo. Repeat it to connect more repos. The connected repo is only read, never changed. If it's missing, FlowMap warns and skips the cross-repo checks; nothing fails.
+
 - **Many services, no single entry point:** put one config in a separate folder that lists them all, and run FlowMap there:
 
   ```js
