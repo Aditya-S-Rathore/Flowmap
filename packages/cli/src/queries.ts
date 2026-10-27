@@ -308,7 +308,7 @@ export class Queries {
 
   status(indexing = false): Status {
     const byKind: Partial<Record<NodeKind, number>> = {};
-    for (const n of this.g.nodes.values()) byKind[n.kind] = (byKind[n.kind] ?? 0) + 1;
+    for (const n of this.g.nodes.values()) if (n.kind !== "Table" || n.file) byKind[n.kind] = (byKind[n.kind] ?? 0) + 1;
     return {
       workspace: this.e.ws.config.name,
       workspaceDir: this.e.ws.dir,
