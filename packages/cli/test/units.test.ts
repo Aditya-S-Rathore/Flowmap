@@ -23,7 +23,7 @@ test("external read/write heuristic", () => {
 
 const DIST = fileURLToPath(new URL("../../dashboard/dist/index.html", import.meta.url));
 
-test("dashboard server: token cookie, host check, read-only API", async (t) => {
+test("dashboard server: token cookie, host check, writes only through guarded endpoints", async (t) => {
   const { existsSync } = await import("node:fs");
   if (!existsSync(DIST)) return t.skip("dashboard not built");
   const dir = mkdtempSync(join(tmpdir(), "flowmap-srv-"));
@@ -50,6 +50,33 @@ test("dashboard server: token cookie, host check, read-only API", async (t) => {
     assert.equal((await fetch(`${base}/api/capture/x`, { method: "POST", headers: { cookie } })).status, 403);
     assert.equal((await fetch(`${base}/api/capture/x`, { method: "POST", headers: { cookie, "x-flowmap": "1", origin: "http://evil.test" } })).status, 403);
     assert.equal((await fetch(`${base}/api/capture/x`, { method: "POST", headers: { cookie, "x-flowmap": "1", origin: base } })).status, 202);
+    // design saves: same guards, JSON only, size cap, safe names, version check
+    const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
+      fetch(`${base}${path}`, { method: "POST", body: typeof body === "string" ? body : JSON.stringify(body), headers: { cookie, "x-flowmap": "1", origin: base, "content-type": "application/json", ...headers } });
+    const design = { version: 0, title: "Test", nodes: [], edges: [] };
+    assert.equal((await post("/api/designs/test", design, { "x-flowmap": "" })).status, 403);
+    assert.equal((await post("/api/designs/test", design, { origin: "http://evil.test" })).status, 403);
+    assert.equal((await post("/api/designs/test", design, { "content-type": "text/plain" })).status, 415);
+    assert.equal((await post("/api/designs/..%2F..%2Fx", design)).status, 400);
+    assert.equal((await post("/api/designs/test", "x".repeat(600 * 1024))).status, 413);
+    const saved = await post("/api/designs/test", design);
+    assert.equal(saved.status, 200);
+    assert.deepEqual(await saved.json(), { slug: "test", version: 1 });
+    assert.equal((await post("/api/designs/test", design)).status, 409);
+    // chat: bad input is refused before Claude is started; stopping when nothing runs is harmless
+    assert.equal((await post("/api/designs/test/chat", { text: "hi", mode: "root" })).status, 400);
+    assert.equal((await post("/api/designs/test/chat", { text: "  " })).status, 400);
+    assert.deepEqual(await (await post("/api/designs/test/chat", { cancel: true })).json(), { stopped: false });
+    assert.equal((await post("/api/designs/test/chat", { text: "hi" }, { "x-flowmap": "" })).status, 403);
+    assert.equal((await post("/api/designs/test/chat", { new: true })).status, 200);
+    assert.equal((await post("/api/designs/test/chat", { open: "c-nope" })).status, 404);
+    assert.equal((await post("/api/designs/test/chat", { remove: "../x" })).status, 404);
+    const flowRes = await fetch(`${base}/api/designs/test/flow?mode=full`, { headers: { cookie } });
+    assert.deepEqual((await flowRes.json()).roots, 0);
+    const view = await (await fetch(`${base}/api/designs/test`, { headers: { cookie } })).json();
+    assert.equal(view.design.title, "Test");
+    assert.equal((await fetch(`${base}/api/designs/nope`, { headers: { cookie } })).status, 404);
+    assert.match(await (await fetch(`${base}/api/designs/test/export`, { headers: { cookie } })).text(), /^# Test/);
     assert.equal((await fetch(`${base}/..%2f..%2fpackage.json`, { headers: { cookie } })).status, 404);
     const page = await fetch(`${base}/`, { headers: { cookie } });
     assert.match(page.headers.get("content-security-policy")!, /script-src 'self' 'sha256-/);

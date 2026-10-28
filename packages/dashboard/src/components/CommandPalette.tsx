@@ -6,7 +6,7 @@ import type { NodeKind, SearchHit } from "../types";
 import { KIND, KindIcon } from "./kind";
 import { exploreHref } from "./refs";
 
-export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function CommandPalette({ open, onOpenChange, onPick }: { open: boolean; onOpenChange: (open: boolean) => void; onPick?: (hit: SearchHit) => void }) {
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [error, setError] = useState<string>();
@@ -31,7 +31,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       contentClassName="fixed inset-x-4 top-24 z-50 mx-auto max-w-xl overflow-hidden rounded-xl border border-line bg-bg shadow-xl">
       <div className="flex items-center gap-2 border-b border-line px-4">
         <Search className="size-4 text-fg-subtle" aria-hidden />
-        <Command.Input value={q} onValueChange={setQ} placeholder="Search screens, APIs, functions, tables…"
+        <Command.Input value={q} onValueChange={setQ} placeholder={onPick ? "Add to design: search screens, APIs, functions, tables…" : "Search screens, APIs, functions, tables…"}
           className="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-fg-subtle" />
         <kbd className="rounded border border-line px-1.5 text-xs text-fg-subtle">Esc</kbd>
       </div>
@@ -43,7 +43,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           <Command.Group key={k} heading={`${KIND[k].label}s`}>
             {hits.filter((h) => h.kind === k).map((h) => (
               <Command.Item key={h.id} value={h.id}
-                onSelect={() => { location.hash = exploreHref(h.id); onOpenChange(false); }}
+                onSelect={() => { if (onPick) onPick(h); else location.hash = exploreHref(h.id); onOpenChange(false); }}
                 className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-sm data-[selected=true]:bg-muted">
                 <KindIcon kind={h.kind} />
                 <span className="max-w-xs shrink-0 truncate font-medium">{h.name}</span>

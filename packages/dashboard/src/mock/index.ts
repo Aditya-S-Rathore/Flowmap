@@ -1,4 +1,4 @@
-import type { WireNode, Wireframe, AppMap, Architecture, ChangeSet, Counts, EdgeView, ExplainCard, Issue, IssueSummary, NodeView, Overview, Ref, SearchHit, ServerEvent, Status, Subgraph, Suggestion, TableInfo } from "../types";
+import type { Design, DesignView, WireNode, Wireframe, AppMap, Architecture, ChangeSet, Counts, EdgeView, ExplainCard, Issue, IssueSummary, NodeView, Overview, Ref, SearchHit, ServerEvent, Status, Subgraph, Suggestion, TableInfo } from "../types";
 import { changedFiles, edges, issues, nodes, repos, rules } from "./data";
 
 const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -283,12 +283,64 @@ export async function mockGet(url: string): Promise<unknown> {
     case "architecture": return architecture();
     case "suggestions": return suggestions;
     case "changes": return changes(p.get("base") || "origin/main");
+    case "claude": return { version: "2.1.0", signedIn: true, plugin: false };
+    case "designs": {
+      if (!rest.length) return [...designs].map(([slug, d]) => ({ slug, title: d.title, summary: d.summary, version: d.version, updatedAt: d.updatedAt, pending: d.nodes.filter((n) => n.pending).length }));
+      const d = designs.get(rest[0]);
+      if (!d) throw new Error(`No design "${rest[0]}"`);
+      if (rest[1] === "flow") return { flow: { rootId: "", nodes: [], edges: [] }, from: [], roots: d.nodes.filter((n) => n.change === "changed").length };
+      return rest[1] === "export" ? `# ${d.title}\n\n${d.summary}\n\n${d.rfc}` : designView(rest[0], d);
+    }
   }
   throw new Error(`Mock: no handler for ${pathname}`);
 }
 
+// ---------- designs (in memory) ----------
+
+const designs = new Map<string, Design>([["archive-users", {
+  version: 1, title: "Archive users", summary: "Admins can archive a user; archived users can't sign in.", rfc: "## Problem\nDeleting users loses their history.", rfcBy: "user",
+  nodes: nodes.slice(0, 3).map((n, i) => ({ id: n.id, change: "existing" as const, kind: n.kind, name: n.name, repo: n.repo, author: "user" as const, x: i * 320, y: 0 }))
+    .concat([{ id: "new:archive", change: "new" as const, kind: "Operation", name: "mutation archiveUser", repo: "backend", author: "claude" as const, pending: true, x: 960, y: 0 } as any]),
+  edges: [], notes: [{ id: "n1", text: "Keep the history visible to admins", x: 0, y: -140, author: "user" }], decisions: [], updatedAt: new Date().toISOString(),
+}]]);
+const chats = new Map<string, DesignView["chat"]>();
+const listeners = new Set<(e: ServerEvent) => void>();
+
+function designView(slug: string, d: Design): DesignView {
+  const ids = new Set(d.nodes.map((n) => n.id));
+  return {
+    slug, design: d, stale: [], chat: chats.get(slug) ?? [],
+    conversations: [{ id: "c-1", title: chats.get(slug)?.[0]?.text.slice(0, 60) || "New conversation", updatedAt: new Date().toISOString(), count: chats.get(slug)?.length ?? 0, active: true }],
+    nodes: d.nodes.map((n) => ({ ...(byId.get(n.id) ?? { id: n.id, kind: n.kind, name: n.name, repo: n.repo, file: n.file ?? "", line: 0, transactional: false, inTx: false, issueCount: 0, maxSeverity: null, outCount: 0, inCount: 0, group: n.repo, attrs: {} }), change: n.change, author: n.author, pending: n.pending, x: n.x, y: n.y, note: n.note, introduced: 0 })),
+    edges: edges.filter((e) => ids.has(e.src) && ids.has(e.dst)),
+    impact: { introduced: issues.filter((i) => ids.has(i.nodeId)).slice(0, 2), resolved: [], tables: [], dependents: [] },
+  };
+}
+
+export async function mockPost(url: string, body: any): Promise<unknown> {
+  await new Promise((r) => setTimeout(r, 150));
+  const [, slug, chat] = /^\/api\/designs(?:\/([^/]+)(\/chat)?)?$/.exec(url) ?? [];
+  if (chat && (body.cancel || body.new || body.open || body.remove)) return body.cancel ? { stopped: false } : {};
+  if (chat) {
+    chats.set(slug, [...(chats.get(slug) ?? []), { role: "user", text: body.text }]);
+    listeners.forEach((l) => l({ type: "chat", slug, tool: "Read src/user/user.service.ts" }));
+    setTimeout(() => {
+      const text = "(mock) Here's the current flow and two decisions to make. Connect a real server with `flowmap dev` to talk to Claude.";
+      chats.set(slug, [...(chats.get(slug) ?? []), { role: "claude", text }]);
+      listeners.forEach((l) => { l({ type: "chat", slug, text }); l({ type: "chat", slug, done: true }); });
+    }, 800);
+    return {};
+  }
+  const prev = designs.get(slug);
+  if ((prev?.version ?? 0) !== body.version) throw Object.assign(new Error("Changed elsewhere"), { status: 409 });
+  const d = { ...body, version: body.version + 1, updatedAt: new Date().toISOString() };
+  designs.set(slug, d);
+  return { slug, version: d.version };
+}
+
 /** Simulates the server's live re-index events every 45 s. */
 export function mockEvents(onEvent: (e: ServerEvent) => void): () => void {
+  listeners.add(onEvent);
   const timer = setInterval(() => {
     onEvent({ type: "indexing", phase: "parse" });
     setTimeout(() => {
@@ -296,5 +348,5 @@ export function mockEvents(onEvent: (e: ServerEvent) => void): () => void {
       onEvent({ type: "updated", files: 12, durationMs: 340 });
     }, 800);
   }, 45_000);
-  return () => clearInterval(timer);
+  return () => { clearInterval(timer); listeners.delete(onEvent); };
 }

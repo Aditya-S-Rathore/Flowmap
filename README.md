@@ -12,9 +12,10 @@ See how your code flows, from a screen through the API and services down to data
             └─ customers.update → [external] Stripe   ⚠ called inside the transaction
 ```
 
-- **Local only.** No network calls, no telemetry. The index is a SQLite file on your machine.
+- **Local only.** No network calls, no telemetry. The index is a SQLite file on your machine. (The optional Claude chat in Designs uses your own Claude Code, see below.)
 - **Works across repos and services.** It links frontend and backend, and service to service, through GraphQL operation names, REST paths and queue names, in any mix of languages.
 - **Three ways to use it:** a dashboard in the browser, a CLI for the terminal and CI, and an MCP server / Claude Code plugin.
+- **Design before you code:** sketch a new feature on top of the real graph, with Claude or by hand, see what it would break, and export the RFC.
 - **TypeScript, JavaScript and Python**, with a plugin per framework:
 
 | Area | Supported |
@@ -110,11 +111,12 @@ The first run parses the whole repo; after that only changed files are parsed. E
 | **When needed** | `flowmap reachable <name>` | Whether the UI can reach it |
 | **When needed** | `flowmap map [screens\|apis\|jobs\|services]` | Every screen / API / job, or which service calls which |
 | **When needed** | `flowmap search <text>` / `doctor` | Find things / check index health and setup suggestions |
+| **After building a design** | `flowmap check --design <name>` | What's done, what's missing, what changed outside the plan, new issues |
 | **Optional** | `flowmap screenshots` | Real screenshots of each screen from your running app, read-only (see below) |
 
 `<name>` can be an API (`setNickname`), a function (`UserService.remove`), a screen path (`/settings/profile`), a component or a table.
 
-**The dashboard** has seven pages:
+**The dashboard** has eight pages:
 - **Overview:** counts, the worst files, and setup suggestions (a framework plugin that's off, an SDK that may be an outside service).
 - **App map:** every screen, API and background job, with what each one touches, plus a map of which service calls which. Open a screen to see its screenshot (if captured) next to an **outline** of what's on it and what each button calls, or its **flow** across repos with each repo or service in its own dashed box.
 - **Explorer:** ⌘K to search, then follow the flow. Transactions are amber, external services red, tables blue; "+N" expands more.
@@ -122,6 +124,7 @@ The first run parses the whole repo; after that only changed files are parsed. E
 - **Rules:** what every rule checks, its severity and how many issues it has.
 - **Changes:** your branch compared with the base.
 - **Tables:** who reads and writes each table.
+- **Designs:** plan a new feature on the real graph (see below).
 
 It runs on `127.0.0.1` behind a one-time token printed in the terminal.
 
@@ -146,14 +149,44 @@ flowmap screenshots           # captures every screen, signed in; re-run with --
 - **Local only** by default (a host name pointing to your machine counts); a staging URL needs `allowRemote: true`. `--mobile`, `--dark`, `--only <text>` for more.
 - Uses your installed Chrome, Edge or Chromium. Pages that need sign-in, error, or have no sample id fall back to the outline.
 
+### Design a feature before building it
+
+**Designs** (in the dashboard) is the same flow view as the App map, with your change drawn on top and editable:
+
+1. **New design** → describe the feature to **Claude** in the chat, or just start adding things. Claude reads the code, gives a short overview and the decisions to make, then draws the design; what it adds is marked for you to accept or reject. There is nothing to configure or pick: the tabs work from what the design changes.
+   - **Changes** is the diagram of the design, about ten nodes: what changes (new, changing, removing), the arrows between them, and what they read, write or send out (tables, queues, outside services). The unchanged code a change merely calls folds behind a **+N** on the node; click it to show them.
+   - **Flow** is the real flow of the code you change, drawn like the App map in repo / service boxes: the way from the screens, APIs and jobs down to your changes. Branches that lead nowhere near a change fold behind a **+N**.
+   - **Full detail** is the whole flow with every service function, side effect, table and transaction. Repos with no change start folded; click one to open it.
+2. **Edit it yourself.** Everything is laid out automatically and re-tidies itself as you add, connect or fold things; drag a node to pin it where you want it (**Tidy** frees them again).
+   - **Add** (toolbar, double-click the canvas, or drag from a node's dot onto empty space): a screen, API, function, table, external service, queue or job, connected from where you started. Type its name right away. ⌘K adds existing code.
+   - Drag from one node's dot to another to connect them; double-click a new node (or F2) to rename it; **Delete** removes it from the drawing; ⌘Z / ⇧⌘Z undo and redo; right-click a node for its actions.
+   - Click any real node for its full detail, with **Modify it** / **Remove it**: that tells FlowMap what your design does to existing code, so Impact, the RFC and the later check know.
+   - Fold a repo box with its arrow; **Focus** hides the side panels; the sidebar, chat and details panel all collapse and stay that way.
+3. **Impact** updates as you go: issues the design *would introduce* (a warning badge on the node) or resolve, tables it touches and who else uses them, screens that depend on what you change.
+4. **RFC** tab: write the **TL;DR** (2–3 lines: what changes, why, the impact, what reviewers must decide), record the decisions, and write only the reasoning (Problem, Goals and non-goals, Proposal, Alternatives considered, Risks and impact, Rollout) from the template or let Claude do it. **Preview** shows the finished document, with the diagram as the picture.
+5. **Export** has three groups. **RFC**: *Copy RFC* (paste into Notion or Linear), a `.md` download, or a `.zip` with the RFC and the picture for Notion's Import. **Diagram**: *Copy diagram image* (then ⌘V in Linear, Notion or Slack), or download it as PNG or SVG. The picture is the Changes view on a white background, with a title, a key, plain-words labels and numbers that match the *What changes* table. The RFC itself reads: status, Problem, TL;DR, **At a glance** (changes, tables touched, what reaches them, new issues) and the picture, your reasoning, then **What changes**, **Decisions** and **Impact**, written by FlowMap from the design.
+6. After building it: `flowmap check --design <name>`.
+
+The chat keeps **every conversation** about a design: the clock icon (History) lists them, opens one to carry on where you left off, or deletes it; the plus starts a new one without losing the others.
+
+Designs are saved in `.flowmap/designs/` (git-ignored, never committed). Share one with *Export → Download design (.json)* and **Import**.
+
+**Claude in the dashboard** needs only [Claude Code](https://claude.com/claude-code) installed and signed in (`flowmap doctor` and the Designs page show what's missing). The chat runs your local `claude` in your repo, so it works like Claude Code in a terminal: your CLAUDE.md, settings, hooks, skills and connectors apply, plus FlowMap's design tools. The chat panel has a switch:
+- **Full access** (default): everything a terminal session can do, including editing files and running commands. A headless run can't ask for approval, so tool use is approved up front; what Claude is doing is listed while it works, and **Stop** ends it. Settings that deny a tool still apply.
+- **Design only**: Claude can read code and edit the design, nothing else.
+
+Like any Claude Code session, the messages and the code it reads go to Anthropic. Without Claude, everything else in Designs works.
+
 ### With Claude Code (once per machine)
+
+`flowmap init` offers to add the plugin. Or in Claude Code:
 
 ```text
 /plugin marketplace add /path/to/flowmap
 /plugin install flowmap@flowmap
 ```
 
-Restart Claude Code, then check that `/mcp` shows **flowmap**. Claude can now trace flows, check impact and run `check` instead of reading large files. If its changes add new error-level issues, a Stop hook asks it to fix or explain them.
+Restart Claude Code, then check that `/mcp` shows **flowmap**. `/flowmap:design` plans a feature from the terminal, on the same canvas. Claude can now trace flows, check impact and run `check` instead of reading large files. If its changes add new error-level issues, a Stop hook asks it to fix or explain them.
 
 ## 4. First run on an existing codebase (once per codebase)
 
@@ -222,7 +255,7 @@ Plugins live in `packages/plugins` (see `bullmq.ts` for a short example). A plug
 **Working on FlowMap itself:** `npm run dev -- -w ../my-repo` restarts the server whenever FlowMap's code changes and keeps you logged in. Open the printed link once. Dashboard changes need `npm run build` and a browser refresh.
 
 **Security:**
-- The dashboard binds to localhost and requires a token cookie. Its API is read-only and it sends a strict CSP.
+- The dashboard binds to localhost and requires a token cookie, and sends a strict CSP. Its API is read-only except two local writes, both inside `.flowmap/` and only from the dashboard itself (same origin + a custom header): capturing a screenshot and saving a design. The design chat runs your local `claude`; in "Full access" mode (the default) it can edit files and run commands in your repos, like a terminal session, and "Design only" limits it to reading code and editing the design.
 - FlowMap never edits source files or reads `.env`/key files.
 - Dependencies are few and pinned.
 

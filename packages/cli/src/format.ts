@@ -1,5 +1,6 @@
 import { styleText } from "node:util";
 import type { AppMap, Architecture, ChangeSet, Counts, ExplainCard, Issue, PathStep, Ref, Subgraph, Suggestion } from "@flowmap/core";
+import type { DesignCheck } from "./designs.ts";
 
 type Style = Parameters<typeof styleText>[0];
 let color = process.stdout.isTTY && !process.env.NO_COLOR;
@@ -104,6 +105,16 @@ export function formatChanges(cs: ChangeSet): string {
   out.push("", formatRefs({ "Affected APIs": cs.affected.operations, "Affected screens": cs.affected.screens, "Tables touched": cs.affected.tables, "External services": cs.affected.externals }));
   out.push("", c("bold", `New issues in changed code (${cs.issues.length})`), formatIssues(cs.issues, { why: true }));
   return out.join("\n");
+}
+
+export function formatDesignCheck(r: DesignCheck): string {
+  const mark = { done: c("green", "✓ done   "), missing: c("red", "✗ missing"), unchanged: c("dim", "· unchanged") };
+  const planned = r.planned.map((p) => `  ${mark[p.status]} ${c("cyan", `[${p.kind === "edge" ? p.change : KIND_TAG[p.kind] ?? p.kind}]`)} ${p.name}${p.kind === "edge" ? "" : c("dim", ` (${p.change})`)}`);
+  return [
+    c("bold", `Planned (${r.planned.filter((p) => p.status === "done").length}/${r.planned.length} done)`), ...planned, "",
+    formatRefs({ "Changed but not in the design": r.unplanned }).replace("Nothing upstream.", c("green", "Nothing changed outside the design.")), "",
+    c("bold", `New issues in changed code (${r.issues.length})`), formatIssues(r.issues, { why: true }),
+  ].join("\n");
 }
 
 export function formatIssuesMarkdown(issues: Issue[]): string {

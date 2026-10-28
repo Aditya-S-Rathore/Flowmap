@@ -1,17 +1,20 @@
-import { BookOpen, CircleAlert, Command as CommandIcon, Database, GitBranch, GitCompare, LayoutDashboard, Map as MapIcon, Moon, Search, Sun, TriangleAlert, Waypoints, Workflow, type LucideIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { BookOpen, CircleAlert, Command as CommandIcon, Database, DraftingCompass, GitBranch, GitCompare, LayoutDashboard, Map as MapIcon, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, TriangleAlert, Waypoints, Workflow, type LucideIcon } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { get, subscribe } from "./api";
 import { CommandPalette } from "./components/CommandPalette";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AppCtx, type Editor } from "./context";
+import { usePersisted } from "./persist";
 import { AppMap } from "./screens/AppMap";
 import { Changes } from "./screens/Changes";
+import { DesignEditor, Designs } from "./screens/Designs";
 import { Explorer } from "./screens/Explorer";
 import { FlowView } from "./screens/FlowView";
 import { Issues } from "./screens/Issues";
 import { Overview } from "./screens/Overview";
 import { Rules } from "./screens/Rules";
 import { Tables } from "./screens/Tables";
-import type { Status } from "./types";
+import type { SearchHit, Status } from "./types";
 
 const NAV: [route: string, label: string, icon: LucideIcon][] = [
   ["overview", "Overview", LayoutDashboard],
@@ -21,6 +24,7 @@ const NAV: [route: string, label: string, icon: LucideIcon][] = [
   ["rules", "Rules", BookOpen],
   ["changes", "Changes", GitCompare],
   ["tables", "Tables", Database],
+  ["designs", "Designs", DraftingCompass],
 ];
 
 const store = {
@@ -42,6 +46,13 @@ export function App() {
   const [indexing, setIndexing] = useState(false);
   const [toast, setToast] = useState<{ text: string; error?: boolean }>();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [navCollapsed, setNavCollapsed] = usePersisted("flowmap.nav", false);
+  const [pick, setPick] = useState<{ fn: (hit: SearchHit) => void }>();
+  // stable, so screens can use them in effects
+  const [oneShot, setOneShot] = useState<{ fn: (hit: SearchHit) => void }>();
+  const openPalette = useCallback((fn?: (hit: SearchHit) => void) => { setOneShot(fn && { fn }); setPaletteOpen(true); }, []);
+  const choosePick = useCallback((fn?: (hit: SearchHit) => void) => setPick(fn && { fn }), []);
+  const notify = useCallback((text: string, error?: boolean) => setToast({ text, error }), []);
   const [now, setNow] = useState(Date.now());
   const [editor, setEditor] = useState<Editor>(store.get("flowmap.editor") === "cursor" ? "cursor" : "vscode");
   const [dark, setDark] = useState(() => document.documentElement.dataset.theme
@@ -75,7 +86,7 @@ export function App() {
       setVersion((v) => v + 1);
       if (e.config) setToast({ text: `Config reloaded${e.files ? ` · re-indexed in ${e.durationMs} ms` : ""}` });
       else if (e.files) setToast({ text: `Index updated · ${e.files} files · ${e.durationMs} ms` });
-    } else {
+    } else if (e.type === "error") {
       setIndexing(false);
       setToast({ text: `Indexing failed: ${e.message}`, error: true });
     }
@@ -102,18 +113,24 @@ export function App() {
 
   const nav = NAV.map(([r, label, Icon]) => (
     <a key={r} href={`#/${r}`} aria-current={active === r ? "page" : undefined} title={label}
-      className={`flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm ${active === r ? "bg-muted font-medium text-fg" : "text-fg-muted hover:bg-muted hover:text-fg"}`}>
-      <Icon className="size-4" aria-hidden /><span className="max-md:sr-only">{label}</span>
+      className={`flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm ${navCollapsed ? "md:justify-center md:px-0" : ""} ${active === r ? "bg-muted font-medium text-fg" : "text-fg-muted hover:bg-muted hover:text-fg"}`}>
+      <Icon className="size-4" aria-hidden /><span className={`max-md:sr-only ${navCollapsed ? "md:sr-only" : ""}`}>{label}</span>
     </a>
   ));
 
   return (
-    <AppCtx.Provider value={{ status, editor, version }}>
+    <AppCtx.Provider value={{ status, editor, version, openPalette, setPick: choosePick, notify }}>
       <div className="flex h-dvh">
-        <aside className="hidden w-60 shrink-0 flex-col border-r border-line bg-subtle md:flex">
-          <div className="px-4 pt-5 pb-4">
-            <p className="flex items-center gap-2 font-semibold"><Waypoints className="size-5 text-accent" aria-hidden />FlowMap</p>
-            <p className="mt-3 truncate text-sm font-medium">{status?.workspace ?? "—"}</p>
+        <aside className={`hidden shrink-0 flex-col border-r border-line bg-subtle md:flex ${navCollapsed ? "md:w-14" : "md:w-60"}`}>
+          <div className={`flex items-center ${navCollapsed ? "flex-col gap-3 px-2 pt-4 pb-3" : "justify-between px-4 pt-5 pb-3"}`}>
+            <p className="flex items-center gap-2 font-semibold"><Waypoints className="size-5 text-accent" aria-hidden />{!navCollapsed && "FlowMap"}</p>
+            <button type="button" onClick={() => setNavCollapsed(!navCollapsed)} aria-label={navCollapsed ? "Expand sidebar" : "Collapse sidebar"} title={navCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              className="rounded-md p-1 text-fg-muted hover:bg-muted hover:text-fg">
+              {navCollapsed ? <PanelLeftOpen className="size-4" aria-hidden /> : <PanelLeftClose className="size-4" aria-hidden />}
+            </button>
+          </div>
+          {!navCollapsed && <div className="px-4 pb-4">
+            <p className="truncate text-sm font-medium">{status?.workspace ?? "—"}</p>
             <ul className="mt-2 flex flex-wrap gap-1.5" aria-label="Repositories">
               {status?.repos.map((r) => (
                 <li key={r.name} title={r.path} className="inline-flex max-w-full items-center gap-1 rounded-md border border-line bg-bg px-1.5 py-0.5 text-xs">
@@ -122,15 +139,15 @@ export function App() {
                 </li>
               ))}
             </ul>
-          </div>
+          </div>}
           <nav aria-label="Main" className="flex-1 space-y-0.5 px-2">{nav}</nav>
-          <p className="flex items-center gap-2 border-t border-line px-4 py-3 text-xs text-fg-muted" aria-live="polite">
+          <p className={`flex items-center gap-2 border-t border-line py-3 text-xs text-fg-muted ${navCollapsed ? "justify-center px-0" : "px-4"}`} aria-live="polite">
             {statusError ? (
-              <><CircleAlert className="size-3.5 text-error" aria-hidden /><span className="truncate" title={statusError}>Server unreachable</span></>
+              <><CircleAlert className="size-3.5 text-error" aria-hidden /><span className={`truncate ${navCollapsed ? "sr-only" : ""}`} title={statusError}>Server unreachable</span></>
             ) : (
               <>
                 <span className={`size-2 rounded-full ${indexing ? "animate-pulse bg-warn" : status?.indexedAt ? "bg-success" : "bg-fg-subtle"}`} aria-hidden />
-                {indexing ? "Indexing…" : status ? ago(status.indexedAt, now) : "Connecting…"}
+                <span className={navCollapsed ? "sr-only" : ""}>{indexing ? "Indexing…" : status ? ago(status.indexedAt, now) : "Connecting…"}</span>
               </>
             )}
           </p>
@@ -161,23 +178,27 @@ export function App() {
             </div>
           </header>
 
-          <main className={`min-h-0 flex-1 ${active === "explore" || (active === "map" && id) ? "" : "overflow-y-auto"}`}>
-            {active === "explore" ? <Explorer id={id} onSearch={() => setPaletteOpen(true)} />
-              : active === "map" && id ? <FlowView key={id} id={id} /> : (
-              <div className="mx-auto max-w-7xl px-6 py-8">
-                {active === "overview" && <Overview />}
-                {active === "map" && <AppMap key={query} params={new URLSearchParams(query)} />}
-                {active === "issues" && <Issues key={query} params={new URLSearchParams(query)} />}
-                {active === "rules" && <Rules />}
-                {active === "changes" && <Changes />}
-                {active === "tables" && <Tables />}
-              </div>
-            )}
+          <main className={`min-h-0 flex-1 ${active === "explore" || ((active === "map" || active === "designs") && id) ? "" : "overflow-y-auto"}`}>
+            <ErrorBoundary key={active}>
+              {active === "explore" ? <Explorer id={id} onSearch={() => setPaletteOpen(true)} />
+                : active === "map" && id ? <FlowView key={id} id={id} />
+                : active === "designs" && id ? <DesignEditor key={id} slug={id} /> : (
+                <div className="mx-auto max-w-7xl px-6 py-8">
+                  {active === "overview" && <Overview />}
+                  {active === "map" && <AppMap key={query} params={new URLSearchParams(query)} />}
+                  {active === "issues" && <Issues key={query} params={new URLSearchParams(query)} />}
+                  {active === "rules" && <Rules />}
+                  {active === "changes" && <Changes />}
+                  {active === "tables" && <Tables />}
+                  {active === "designs" && <Designs />}
+                </div>
+              )}
+            </ErrorBoundary>
           </main>
         </div>
       </div>
 
-      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <CommandPalette open={paletteOpen} onOpenChange={(o) => { setPaletteOpen(o); if (!o) setOneShot(undefined); }} onPick={oneShot?.fn ?? pick?.fn} />
 
       {toast && (
         <div role="status" className={`fixed right-4 bottom-4 z-50 flex items-center gap-2 rounded-lg border bg-bg px-3 py-2 text-sm shadow-lg ${toast.error ? "border-error/40 text-error" : "border-line text-fg-muted"}`}>

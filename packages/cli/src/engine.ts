@@ -108,8 +108,8 @@ export class Engine {
     return written;
   }
 
-  private runRules(): RuleState {
-    const g = this.graph;
+  /** Runs every rule on `g` (the loaded graph, or an overlay of it for designs). */
+  runRules(g = this.graph): RuleState {
     const issues: Issue[] = [];
     let suppressed = 0;
     for (const rule of rules) {
@@ -120,7 +120,7 @@ export class Engine {
         const file = f.file ?? node?.file ?? "";
         const line = f.line ?? node?.line ?? 0;
         const repo = node?.repo ?? f.nodeId.split(":")[0];
-        if (this.isSuppressed(rule.id, repo, file, line, node?.line)) {
+        if (this.isSuppressed(g, rule.id, repo, file, line, node?.line)) {
           suppressed++;
           continue;
         }
@@ -144,8 +144,8 @@ export class Engine {
   }
 
   /** `// flowmap-ignore <rule>: <reason>` on the line(s) above the finding or above the function. A reason is required. */
-  private isSuppressed(rule: string, repo: string, file: string, line: number, nodeLine?: number) {
-    const meta = this.graph.fileMeta.get(`${repo}\0${file}`);
+  private isSuppressed(g: Graph, rule: string, repo: string, file: string, line: number, nodeLine?: number) {
+    const meta = g.fileMeta.get(`${repo}\0${file}`);
     return (meta?.suppressions ?? []).some((s: { line: number; rule: string; reason: string }) =>
       (s.rule === rule || s.rule === "all") && s.reason &&
       ((s.line >= line - 3 && s.line <= line) || (nodeLine !== undefined && s.line >= nodeLine - 3 && s.line <= nodeLine)));

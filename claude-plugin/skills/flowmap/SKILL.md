@@ -18,6 +18,7 @@ FlowMap has indexed this workspace into a graph: screens → client calls → AP
 | "Who writes table T?" | `tables` |
 | Not sure of the exact name | `search` |
 | Before saying a change is done | `check` (default: new issues in changed code) |
+| Planning / designing a new feature, writing an RFC | the `design` skill: `design_context` → `design_save` → `design_impact` |
 
 ## Rules of thumb
 

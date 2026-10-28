@@ -11,6 +11,21 @@ export async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Writes (design saves, chat). Same-origin plus the custom header the server requires against CSRF. Errors carry the HTTP status. */
+export async function post<T>(path: string, body: unknown): Promise<T> {
+  if (MOCK) return (await import("./mock")).mockPost(path, body) as Promise<T>;
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "x-flowmap": "1" }, body: JSON.stringify(body) });
+  if (!res.ok) throw Object.assign(new Error((await res.text()) || `${res.status} ${res.statusText}`), { status: res.status });
+  return res.json() as Promise<T>;
+}
+
+export async function getText(path: string): Promise<string> {
+  if (MOCK) return String(await (await import("./mock")).mockGet(path));
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(await res.text());
+  return res.text();
+}
+
 export const enc = encodeURIComponent;
 
 /** Subscribes to live index events. Returns an unsubscribe function. */

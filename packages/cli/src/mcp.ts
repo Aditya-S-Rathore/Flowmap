@@ -5,7 +5,9 @@ import type { Engine } from "./engine.ts";
 import { formatArchitecture, formatExplain, formatIssues, formatMap, formatPaths, formatRefs, formatTree, setColor } from "./format.ts";
 import { MapQueries } from "./map.ts";
 import { Queries } from "./queries.ts";
+import { designContext, designUsage, designView, readDesign, saveDesign, toMarkdown, toMermaid } from "./designs.ts";
 
+const SLUG = z.string().describe("Design name: lowercase letters, digits and dashes (e.g. archive-users).");
 const TARGET = z.string().describe("Name or id: an API (setNickname), a function (UserService.remove), a screen path (/settings/billing), a component or a table (users).");
 
 /** MCP server over stdio. Every call first syncs the index with the files on disk (incremental, usually < 1s). */
@@ -123,6 +125,56 @@ export async function serveMcp(engine: Engine) {
     fresh();
     const list = scope === "changed" ? q.changes(base).issues : scope === "new" ? q.issues({ status: "new" }) : q.issues();
     return text(`${list.length} issue(s)\n${formatIssues(list.slice(0, 40), { why: true })}${list.length > 40 ? `\n… ${list.length - 40} more` : ""}`, { count: list.length });
+  });
+
+  server.registerTool("design_context", {
+    title: "Context for designing a feature",
+    description: "Before designing a feature: the current flow from a screen / API / function to look at first, related code by name, tables involved, open issues, the codebase's naming style and existing designs.",
+    inputSchema: z.object({ feature: z.string().describe("What the feature should do, in the user's words"), anchor: z.string().optional().describe("A screen, API or function to look at first") }),
+    annotations: { readOnlyHint: true },
+  }, async ({ feature, anchor }) => {
+    fresh();
+    return text(`${designContext(q, feature, anchor)}\n\n${designUsage}`);
+  });
+
+  server.registerTool("design_get", {
+    title: "Read a design",
+    description: "A design as JSON (to edit and save back, keep its version), as the Markdown RFC + plan, or as a Mermaid diagram.",
+    inputSchema: z.object({ slug: SLUG, format: z.enum(["json", "markdown", "mermaid"]).default("json") }),
+    annotations: { readOnlyHint: true },
+  }, async ({ slug, format }) => {
+    fresh();
+    if (format === "json") return text(JSON.stringify(readDesign(engine.ws, slug), null, 2));
+    const v = designView(q, slug);
+    return text(format === "markdown" ? toMarkdown(v) : toMermaid(v));
+  });
+
+  server.registerTool("design_save", {
+    title: "Save a design",
+    description: `Create (version 0) or update a design; the user sees it live on the dashboard canvas, with your additions marked for them to accept. Pass the version you read: if the user edited it since, read it again and re-apply your change. Writes only .flowmap/designs/<slug>.json, never source code.\n${designUsage}`,
+    inputSchema: z.object({ slug: SLUG, design: z.record(z.string(), z.unknown()).describe("The full design JSON") }),
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  }, async ({ slug, design }) => {
+    fresh();
+    const d = saveDesign(engine.ws, slug, design, "claude");
+    return text(`Saved ${slug} (version ${d.version}). Open the dashboard at #/designs/${slug} to review.`);
+  });
+
+  server.registerTool("design_impact", {
+    title: "Impact of a design",
+    description: "What building the design would change: issues it would introduce or resolve, tables it touches and who else uses them, screens / APIs depending on changed or removed code.",
+    inputSchema: z.object({ slug: SLUG }),
+    annotations: { readOnlyHint: true },
+  }, async ({ slug }) => {
+    fresh();
+    const { impact, stale } = designView(q, slug);
+    return text([
+      `Would introduce ${impact.introduced.length} issue(s)\n${formatIssues(impact.introduced, { why: true })}`,
+      impact.resolved.length ? `Would resolve: ${impact.resolved.map((i) => `${i.ruleTitle} (${i.nodeName})`).join(", ")}` : "",
+      impact.tables.length ? `Tables: ${impact.tables.map((t) => `${t.name} (${t.readers.length} readers, ${t.writers.length} writers)`).join(", ")}` : "",
+      impact.dependents.length ? formatRefs(Object.fromEntries(impact.dependents.map((x) => [`Depends on ${x.name}`, x.refs]))) : "",
+      stale.length ? `No longer in the code: ${stale.join(", ")}` : "",
+    ].filter(Boolean).join("\n\n"));
   });
 
   await server.connect(new StdioServerTransport());

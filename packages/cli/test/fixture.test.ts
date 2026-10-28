@@ -196,11 +196,15 @@ test("MCP server answers over stdio", async () => {
     send({ method: "notifications/initialized" });
     send({ id: 2, method: "tools/list" });
     const tools = (await wait(2)).result.tools.map((t: any) => t.name).sort();
-    assert.deepEqual(tools, ["check", "explain", "impact", "map", "reachable", "search", "tables", "trace"]);
+    assert.deepEqual(tools, ["check", "design_context", "design_get", "design_impact", "design_save", "explain", "impact", "map", "reachable", "search", "tables", "trace"]);
     send({ id: 3, method: "tools/call", params: { name: "explain", arguments: { target: "setNickname" } } });
     const text = (await wait(3)).result.content[0].text;
     assert.match(text, /caller check: no/);
     assert.match(text, /Stripe/);
+    send({ id: 4, method: "tools/call", params: { name: "design_context", arguments: { feature: "let users change their nickname twice", anchor: "setNickname" } } });
+    const ctx = (await wait(4)).result.content[0].text;
+    assert.match(ctx, /Current flow from mutation setNickname/);
+    assert.match(ctx, /Naming in this codebase/);
   } finally {
     child.kill();
   }

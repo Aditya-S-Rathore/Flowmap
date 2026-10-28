@@ -1,20 +1,22 @@
 import { parseArgs } from "node:util";
 import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { basename, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createInterface } from "node:readline/promises";
 import { execFileSync } from "node:child_process";
 import { detectDeps, gitRoot, ignoreIndex } from "@flowmap/core";
 import { builtinPlugins } from "@flowmap/plugins";
 import { Engine } from "./engine.ts";
 import { Queries } from "./queries.ts";
 import { MapQueries } from "./map.ts";
-import { formatArchitecture, formatChanges, formatExplain, formatIssues, formatIssuesMarkdown, formatMap, formatPaths, formatRefs, formatSuggestions, formatTree, setColor } from "./format.ts";
+import { formatArchitecture, formatChanges, formatDesignCheck, formatExplain, formatIssues, formatIssuesMarkdown, formatMap, formatPaths, formatRefs, formatSuggestions, formatTree, setColor } from "./format.ts";
 
 const HELP = `FlowMap — see how your code flows, from screen to database.
 
 Usage: flowmap <command> [options]
 
 Setup
-  init [--connect <repo path>]...                    add flowmap.config.mjs to this repo (auto-detects plugins)
+  init [--connect <repo path>]... [--yes|--no-claude]   add flowmap.config.mjs (auto-detects plugins), offer the Claude Code plugin
   index [--full]                                     build / update the index
   hooks install                                      re-index after git pull/checkout (local hooks)
 
@@ -30,6 +32,7 @@ Explore
 
 Review
   check [--all|--new] [--base <ref>] [--format text|json|md]   new issues (default: in changed code)
+  check --design <name> [--base <ref>]               does the code match the design? (planned, unplanned, new issues)
   changes [--base <ref>]                             what your branch affects
   baseline update                                    accept current issues as the baseline
   doctor                                             index health and accuracy report
@@ -53,6 +56,7 @@ const { values: opts, positionals } = parseArgs({
     all: { type: "boolean" },
     new: { type: "boolean" },
     base: { type: "string" },
+    design: { type: "string" },
     format: { type: "string", default: "text" },
     connect: { type: "string", multiple: true },
     force: { type: "boolean" },
@@ -63,6 +67,8 @@ const { values: opts, positionals } = parseArgs({
     mobile: { type: "boolean" },
     dark: { type: "boolean" },
     "no-color": { type: "boolean" },
+    yes: { type: "boolean", short: "y" },
+    "no-claude": { type: "boolean" },
     help: { type: "boolean", short: "h" },
   },
 });
@@ -174,6 +180,13 @@ async function main() {
 async function check() {
   const e = await engine();
   const q = new Queries(e);
+  if (opts.design) {
+    const { checkDesign, readDesign } = await import("./designs.ts");
+    const r = checkDesign(q, readDesign(e.ws, opts.design), opts.base);
+    console.log(formatDesignCheck(r));
+    if (r.planned.some((p) => p.status === "missing") || r.issues.some((i) => i.severity === "error")) process.exitCode = 1;
+    return;
+  }
   const list = opts.all ? q.issues() : opts.new ? q.issues({ status: "new" }) : q.changes(opts.base).issues;
   if (opts.format === "json") console.log(JSON.stringify(list, null, 2));
   else if (opts.format === "md") console.log(formatIssuesMarkdown(list));
@@ -184,10 +197,18 @@ async function check() {
   if (list.some((i) => i.severity === "error")) process.exitCode = 1;
 }
 
-function init() {
+const FLOWMAP_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+const PLUGIN_STEPS = [["plugin", "marketplace", "add", FLOWMAP_ROOT], ["plugin", "install", "flowmap@flowmap"]];
+
+async function init() {
   const root = gitRoot(process.cwd()) ?? process.cwd();
   const file = join(root, "flowmap.config.mjs");
-  if (existsSync(file) && !opts.force) throw new Error(`${file} already exists (use --force to overwrite).`);
+  if (existsSync(file) && !opts.force) {
+    // already set up (e.g. by a teammate): leave the config alone, only offer the Claude step
+    console.log(`${file} already exists, left unchanged (--force overwrites it).${opts.connect?.length ? " --connect was not applied: add the repos to `connect` in it." : ""}`);
+    if (!opts["no-claude"]) await setupClaude();
+    return console.log("\nNext: flowmap dev");
+  }
   const deps = detectDeps(root);
   const plugins = builtinPlugins.filter((p) => p.detect?.(deps)).map((p) => p.id);
   if (deps.python && !plugins.some((id) => builtinPlugins.find((p) => p.id === id)?.extractPy)) plugins.push("python");
@@ -208,7 +229,32 @@ export default {
 };
 `);
   const ignored = ignoreIndex(root);
-  console.log(`Created ${file}\nPlugins: ${plugins.join(", ") || "(none detected — add them to the config)"}${ignored ? "\nAdded .flowmap/ to .gitignore" : ""}\n\nNext: flowmap index, then flowmap dev`);
+  console.log(`Created ${file}\nPlugins: ${plugins.join(", ") || "(none detected — add them to the config)"}${ignored ? "\nAdded .flowmap/ to .gitignore" : ""}`);
+  if (!opts["no-claude"]) await setupClaude();
+  console.log("\nNext: flowmap dev (dashboard → Designs to plan a feature with Claude)");
+}
+
+/** Claude Code is optional: the dashboard chat only needs it installed and signed in; the plugin adds FlowMap to terminal sessions. */
+async function setupClaude() {
+  const { claudeStatus } = await import("./chat.ts");
+  const s = await claudeStatus();
+  if (!s.version) return console.log("\nClaude Code not found. Install it to design features with Claude (everything else works without it): https://claude.com/claude-code");
+  console.log(`\nClaude Code ${s.version}${s.signedIn ? "" : " · not signed in: run `claude` once to sign in"}`);
+  if (s.plugin) return console.log("FlowMap plugin for Claude Code: installed");
+  const manual = PLUGIN_STEPS.map((a) => `claude ${a.join(" ")}`).join(" && ");
+  let yes = !!opts.yes;
+  if (!yes && process.stdin.isTTY) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    yes = !/^n/i.test(await rl.question("Add the FlowMap plugin to Claude Code (tools, /flowmap:design, issue check before finishing)? [Y/n] "));
+    rl.close();
+  }
+  if (!yes) return console.log(`To add it later: ${manual}`);
+  try {
+    for (const a of PLUGIN_STEPS) execFileSync("claude", a, { stdio: "inherit" });
+    console.log("FlowMap plugin added. Restart Claude Code sessions to load it.");
+  } catch {
+    console.log(`Could not add the plugin. Run: ${manual}`);
+  }
 }
 
 async function doctor() {
@@ -231,6 +277,13 @@ async function doctor() {
   console.log(`\nIssues: ${e.issues.length} (${e.issues.filter((i) => i.status === "new").length} new, ${e.suppressed} suppressed)`);
   const suggestions = new MapQueries(q).suggestions();
   if (suggestions.length) console.log(`\nSuggestions\n${formatSuggestions(suggestions)}`);
+  const { claudeStatus } = await import("./chat.ts");
+  const c = await claudeStatus();
+  console.log(`\nClaude Code (optional, for designing with Claude)\n${[
+    c.version ? `  installed: ${c.version}` : "  not installed → https://claude.com/claude-code",
+    c.version && (c.signedIn ? "  signed in" : "  not signed in → run `claude` once"),
+    c.version && (c.plugin ? "  FlowMap plugin: installed" : `  FlowMap plugin: not added → ${PLUGIN_STEPS.map((a) => `claude ${a.join(" ")}`).join(" && ")}`),
+  ].filter(Boolean).join("\n")}`);
 }
 
 function installHooks() {

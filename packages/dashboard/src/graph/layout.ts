@@ -9,20 +9,26 @@ export const NODE_H = 80;
 
 export interface Box { id: string; x: number; y: number; width: number; height: number }
 
-const OPTIONS = {
+export interface Gap { layers: number; nodes: number }
+const TIGHT: Gap = { layers: 80, nodes: 24 };
+/** Room for the words on arrows (the design canvas and the RFC image). */
+export const ROOMY: Gap = { layers: 130, nodes: 40 };
+
+const options = (gap: Gap) => ({
   "elk.algorithm": "layered",
   "elk.direction": "RIGHT",
-  "elk.layered.spacing.nodeNodeBetweenLayers": "80",
-  "elk.spacing.nodeNode": "24",
+  "elk.layered.spacing.nodeNodeBetweenLayers": String(gap.layers),
+  "elk.spacing.nodeNode": String(gap.nodes),
   "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
-};
+});
 
 /**
  * Left-to-right layout. With `groups` (node id → group name) and more than one group, each group becomes a box
  * (repo / service) laid out together with the edges that cross between boxes. Child positions are relative to their box.
  */
 export async function layout(ids: string[], edges: { id: number; src: string; dst: string }[], groups?: Map<string, string>,
-  size: (id: string) => { width: number; height: number } = () => ({ width: NODE_W, height: NODE_H })) {
+  size: (id: string) => { width: number; height: number } = () => ({ width: NODE_W, height: NODE_H }), gap: Gap = TIGHT) {
+  const OPTIONS = options(gap);
   const names = groups ? [...new Set(ids.map((id) => groups.get(id) ?? ""))] : [];
   const grouped = names.length > 1;
   const leaf = (id: string): ElkNode => ({ id, ...size(id) });

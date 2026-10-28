@@ -45,6 +45,30 @@ export class Graph {
   }
 
   /**
+   * A copy with nodes / edges added and removed, for "what if" rule runs; this graph is not changed.
+   * Edges into a removed node stay, unresolved (as after a real deletion); edges out of it go.
+   */
+  overlay(add: { nodes: GraphNode[]; edges: Omit<Edge, "id">[] }, remove: { nodes: Set<string>; edge: (e: Edge) => boolean }): Graph {
+    const g = new Graph();
+    g.fileMeta = this.fileMeta;
+    for (const [id, n] of this.nodes) if (!remove.nodes.has(id)) g.nodes.set(id, n);
+    for (const n of add.nodes) g.nodes.set(n.id, n);
+    let id = this.edges.reduce((min, e) => Math.min(min, e.id), 0);
+    const keep = (e: Edge) => {
+      g.edges.push(e);
+      push(g.out, e.src, e);
+      if (e.dst) push(g.in, e.dst, e);
+    };
+    for (const e of this.edges) {
+      if (remove.nodes.has(e.src) || remove.edge(e)) continue;
+      keep(e.dst && remove.nodes.has(e.dst) ? { ...e, dst: null } : e);
+    }
+    for (const e of add.edges) keep({ ...e, id: --id } as Edge);
+    g.computeTx();
+    return g;
+  }
+
+  /**
    * Route registrations (app.get("/x", auth, handler)) record guards on the API node; the handler may live in another file.
    * Merge them, plus what the handler itself does with the request, into the handler's attrs so rules see one picture.
    */

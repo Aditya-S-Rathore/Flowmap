@@ -8,13 +8,13 @@ import { NodeCard, type CardNode } from "./NodeCard";
 const nodeTypes = { card: NodeCard, "group-box": GroupBox };
 
 // Mid-tone hex values read well on both light and dark canvases (SVG markers can't use CSS vars).
-const C = { neutral: "#a1a1aa", write: "#3b82f6", external: "#ef4444", afterCommit: "#22c55e", request: "#6366f1" };
+export const C = { neutral: "#a1a1aa", write: "#3b82f6", external: "#ef4444", afterCommit: "#22c55e", request: "#6366f1" };
 
-const boxKind = (group: string, members: NodeView[]): BoxKind =>
+export const boxKind = (group: string, members: NodeView[]): BoxKind =>
   group === "External services" ? "external" : group === "Database" ? "database" : group === "Queues" ? "queues"
     : members.some((n) => n.kind === "Route" || n.kind === "Component" || n.kind === "ClientCall") ? "ui" : "service";
 
-function toEdge(e: EdgeView): Edge {
+export function toEdge(e: EdgeView): Edge {
   let color = C.neutral;
   let dash: string | undefined;
   const labels: string[] = [];
@@ -38,7 +38,7 @@ const swatch = (stroke: string, dash?: string) => (
   <svg width="24" height="8" aria-hidden><line x1="0" y1="4" x2="24" y2="4" stroke={stroke} strokeWidth="2" strokeDasharray={dash} /></svg>
 );
 
-function Legend() {
+export function Legend() {
   const items: [ReactNode, string][] = [
     [<span className="block h-3 w-6 rounded border-2 border-dashed border-line-strong" />, "Repo / service"],
     [<span className="block h-3 w-6 rounded-sm border border-warn/40 bg-tx" />, "In DB transaction (TX)"],

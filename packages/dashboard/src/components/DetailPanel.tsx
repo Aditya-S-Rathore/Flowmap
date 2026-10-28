@@ -21,12 +21,13 @@ function Section({ title, count, children }: { title: string; count?: number; ch
 
 const none = (text: string) => <p className="text-sm text-fg-subtle">{text}</p>;
 
-export function DetailPanel({ id, isRoot, onClose, onFocus }: { id: string; isRoot: boolean; onClose: () => void; onFocus: () => void }) {
+/** `embedded`: just the sections (the caller shows the header and does the scrolling), e.g. inside the design panel. */
+export function DetailPanel({ id, isRoot, onClose, onFocus, embedded = false }: { id: string; isRoot: boolean; onClose: () => void; onFocus: () => void; embedded?: boolean }) {
   const { data: c, error, reload } = useApi<ExplainCard>(`/api/explain/${enc(id)}`);
 
   return (
-    <aside aria-label="Node details" className="flex h-full w-full flex-col overflow-hidden border-l border-line bg-bg md:w-md">
-      <div className="flex items-start gap-3 px-5 py-4">
+    <aside aria-label="Node details" className={embedded ? "" : "flex h-full w-full flex-col overflow-hidden border-l border-line bg-bg md:w-md"}>
+      {!embedded && <div className="flex items-start gap-3 px-5 py-4">
         <div className="min-w-0 flex-1">
           {c ? (
             <>
@@ -51,9 +52,9 @@ export function DetailPanel({ id, isRoot, onClose, onFocus }: { id: string; isRo
         <button type="button" onClick={onClose} aria-label="Close details (Esc)" className="rounded-md p-1 text-fg-muted hover:bg-muted">
           <X className="size-4" aria-hidden />
         </button>
-      </div>
+      </div>}
 
-      <div className="flex-1 overflow-y-auto">
+      <div className={embedded ? "" : "flex-1 overflow-y-auto"}>
         {error && <div className="p-5"><ErrorState error={error} onRetry={reload} /></div>}
         {!c && !error && <div className="space-y-3 p-5">{[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-16 w-full" />)}</div>}
         {c && (

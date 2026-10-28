@@ -133,3 +133,6 @@ body {
 [cmdk-group-heading] {
   @apply px-2 pt-2 pb-1 text-xs font-medium text-fg-subtle;
 }
+
+/* design canvas: when the layout re-tidies itself, nodes glide to their new place (not while dragging) */
+.design-animating .react-flow__node { transition: transform 300ms ease; }

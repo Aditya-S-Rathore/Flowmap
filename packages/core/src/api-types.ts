@@ -341,8 +341,133 @@ export interface Suggestion {
   config?: string;       // snippet to add to flowmap.config.mjs
 }
 
+// ---------- designs: a feature drawn on top of the real graph before it is built ----------
+
+export type DesignAuthor = "user" | "claude";
+
+/** Real node (graph id) or proposed one (id "new:<key>"). `pending`: added by Claude, waiting for accept / reject. */
+export interface DesignNode {
+  id: string;
+  change: "existing" | "new" | "changed" | "removed";
+  kind: NodeKind;
+  name: string;
+  repo: string;
+  file?: string;            // proposed: suggested location
+  transactional?: boolean;  // proposed: opens a transaction
+  guards?: string[];        // proposed: auth guards it will have
+  note?: string;
+  x?: number;
+  y?: number;
+  keep?: boolean;           // you asked to see it (added from search): the Changes and Flow views show it although it is unchanged
+  pinned?: boolean;         // you placed it: x / y are honoured. Without it the layout decides (older files saved x / y for every node)
+  author: DesignAuthor;
+  pending?: boolean;
+}
+
+/** Only proposed edges are stored; edges between real nodes come from the graph. */
+export interface DesignEdge {
+  id: string;
+  src: string;
+  dst: string;
+  kind: EdgeKind;
+  change: "new" | "removed";
+  author: DesignAuthor;
+  pending?: boolean;
+}
+
+export interface DesignNote {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  author: DesignAuthor;
+}
+
+export type DesignStatus = "draft" | "review" | "approved" | "rejected";
+
+export interface Design {
+  version: number;
+  title: string;
+  status?: DesignStatus;    // where the RFC stands; "draft" when missing
+  summary: string;          // the TL;DR: 2–3 lines, what changes, why, the impact, what reviewers must decide
+  rfc: string;              // Markdown, the doc reviewers read
+  rfcBy?: DesignAuthor;     // last to edit the RFC (Claude never overwrites the user's text)
+  nodes: DesignNode[];
+  edges: DesignEdge[];
+  notes: DesignNote[];
+  decisions: { question: string; answer: string }[];
+  updatedAt: string;
+}
+
+/** Conversation with Claude about a design, kept next to it (saving it never conflicts with canvas edits). */
+export interface DesignChat {
+  session?: string;         // Claude conversation id, to continue it
+  messages: { role: DesignAuthor; text: string; tools?: string[]; model?: string }[];   // tools: what Claude did while answering
+}
+
+export interface DesignSummary {
+  slug: string;
+  title: string;
+  summary: string;
+  version: number;
+  updatedAt: string;
+  pending: number;
+}
+
+export interface DesignImpact {
+  introduced: Issue[];      // would appear if the design is built
+  resolved: Issue[];        // would go away
+  tables: TableInfo[];      // tables the design touches, with everyone else who reads / writes them
+  dependents: { id: string; name: string; refs: Ref[] }[];   // what depends on changed / removed nodes
+}
+
+export type DesignNodeView = NodeView & Pick<DesignNode, "change" | "author" | "pending" | "x" | "y" | "note" | "keep"> & {
+  introduced: number;       // issues the design would add on this node (included in issueCount)
+  context?: boolean;        // dashboard only: part of the real flow around the changes, not stored in the design
+};
+export type DesignEdgeView = EdgeView & { designId?: string; change?: DesignEdge["change"]; pending?: boolean };
+
+/** Conversations with Claude about one design, newest first (the open one is `active`). */
+export interface ChatSummary {
+  id: string;
+  title: string;            // the first thing you asked
+  updatedAt: string;
+  count: number;            // messages
+  active: boolean;
+}
+
+/** The real flow around a design's changes, found automatically: the flows of the entry points (screens, APIs, jobs) that reach them. */
+export interface DesignFlow {
+  flow: Subgraph;
+  from: Ref[];              // the entry points drawn
+  roots: number;            // existing code the design changes (0: nothing to draw a flow for yet)
+}
+
+export interface DesignView {
+  slug: string;
+  design: Design;
+  nodes: DesignNodeView[];
+  edges: DesignEdgeView[];
+  stale: string[];          // real nodes no longer in the code
+  impact: DesignImpact;
+  chat: DesignChat["messages"];       // the open conversation
+  conversations: ChatSummary[];
+}
+
+/** Claude Code on this machine, for the dashboard's setup checklist. */
+export interface ClaudeStatus {
+  version: string | null;   // null: not installed
+  signedIn: boolean;
+  plugin: boolean;          // FlowMap plugin installed (tools + skills in terminal sessions)
+}
+
 export type ServerEvent =
   | { type: "indexing"; phase: string }
   | { type: "updated"; files: number; durationMs: number; config?: boolean }
   | { type: "error"; message: string }
-  | { type: "shot"; id: string; ok: boolean; note?: string };
+  | { type: "shot"; id: string; ok: boolean; note?: string }
+  | { type: "design"; slug: string; version: number }
+  | { type: "chat"; slug: string; text?: string; tool?: string; done?: boolean; error?: string };
+
+/** What the dashboard chat may do: "full" = everything a terminal Claude Code session can; "design" = read code + edit the design only. */
+export type ChatMode = "full" | "design";

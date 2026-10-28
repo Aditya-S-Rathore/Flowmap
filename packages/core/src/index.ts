@@ -1,5 +1,6 @@
 export * from "./types.ts";
 export * from "./api-types.ts";
+export * from "./design-view.ts";
 export { Store } from "./store.ts";
 export { Graph, type Edge } from "./graph.ts";
 export { indexWorkspace, activePlugins, usesPython, type IndexStats } from "./indexer.ts";
