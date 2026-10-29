@@ -421,7 +421,7 @@ export interface DesignImpact {
   dependents: { id: string; name: string; refs: Ref[] }[];   // what depends on changed / removed nodes
 }
 
-export type DesignNodeView = NodeView & Pick<DesignNode, "change" | "author" | "pending" | "x" | "y" | "note" | "keep"> & {
+export type DesignNodeView = NodeView & Pick<DesignNode, "change" | "author" | "pending" | "x" | "y" | "pinned" | "note" | "keep"> & {
   introduced: number;       // issues the design would add on this node (included in issueCount)
   context?: boolean;        // dashboard only: part of the real flow around the changes, not stored in the design
 };

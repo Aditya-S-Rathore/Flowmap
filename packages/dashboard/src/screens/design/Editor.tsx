@@ -193,7 +193,7 @@ export function DesignEditor({ slug }: { slug: string }) {
       const known = server.get(n.id) ?? flowNodes.get(n.id);
       const base = known ?? { id: n.id, kind: n.kind, name: n.name, repo: n.repo, file: n.file ?? "", line: 0, transactional: false, inTx: false, issueCount: 0, maxSeverity: null, outCount: 0, inCount: 0, group: n.repo, attrs: {} };
       const own = n.change === "new" ? { kind: n.kind, name: n.name, repo: n.repo, file: n.file ?? "", transactional: !!n.transactional } : {};
-      return { introduced: 0, ...base, ...own, context: undefined, change: n.change, author: n.author, pending: n.pending, x: n.x, y: n.y, note: n.note, keep: n.keep };
+      return { introduced: 0, ...base, ...own, context: undefined, change: n.change, author: n.author, pending: n.pending, x: n.x, y: n.y, pinned: n.pinned, note: n.note, keep: n.keep };
     });
     const inDesign = new Set(mine.map((n) => n.id));
     const context = (ctx?.nodes ?? []).filter((n) => !inDesign.has(n.id)).map((n): DesignNodeView => ({ ...n, introduced: 0, change: "existing", author: "user", context: true }));
@@ -237,9 +237,8 @@ export function DesignEditor({ slug }: { slug: string }) {
 
   // ---- editing: small pure helpers, then the actions the canvas, menus and panel call ----
   /** Makes sure a real node (maybe only shown as context so far) is part of the design. */
-  const ensure = (d: Design, id: string): Design => {
+  const ensure = (d: Design, id: string, v: Pick<DesignNodeView, "kind" | "name" | "repo"> | undefined = viewOf(id)): Design => {
     if (d.nodes.some((n) => n.id === id)) return d;
-    const v = viewOf(id);
     return v ? { ...d, nodes: [...d.nodes, { id, change: "existing", kind: v.kind, name: v.name, repo: v.repo, author: "user" }] } : d;
   };
   const mapNode = (d: Design, id: string, fn: (n: DesignNode) => DesignNode): Design => ({ ...d, nodes: d.nodes.map((n) => (n.id === id ? fn(n) : n)) });
@@ -265,8 +264,8 @@ export function DesignEditor({ slug }: { slug: string }) {
     if (id) { setTab("selection"); setSideOpen(true); }
   }, [setSideOpen]);
 
-  const addReal = useCallback((h: Pick<SearchHit, "id">) => {
-    update((d) => mapNode(ensure(d, h.id), h.id, (n) => ({ ...n, keep: true })));         // you asked for it: show it even though it is unchanged
+  const addReal = useCallback((h: SearchHit) => {
+    update((d) => mapNode(ensure(d, h.id, h), h.id, (n) => ({ ...n, keep: true })));         // you asked for it: show it even though it is unchanged
     select(h.id);
   }, [update, select]);                                                                // eslint-disable-line react-hooks/exhaustive-deps -- `ensure` reads the latest state from a ref
 
