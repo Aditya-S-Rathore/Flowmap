@@ -7,6 +7,7 @@ const READ = new Set(["find", "findOne", "findOneBy", "findBy", "findAndCount", 
 const QB_TERMINAL = new Set(["getMany", "getOne", "getRawMany", "getRawOne", "getCount", "getManyAndCount", "getExists", "execute", "stream", "getRawAndEntities", "getOneOrFail"]);
 const MANAGER_ROOTS = new Set(["manager", "em", "entityManager", "queryRunner", "trx", "transactionalEntityManager", "tx", "m"]);
 const RELATIONS = ["ManyToOne", "OneToOne"];
+const COLUMNS = ["Column", "PrimaryColumn", "PrimaryGeneratedColumn", "CreateDateColumn", "UpdateDateColumn", "DeleteDateColumn", "VersionColumn"];
 const MANY = new Set(["find", "findBy", "findAndCount", "findAndCountBy", "getMany", "getRawMany", "getManyAndCount", "getRawAndEntities", "stream"]);
 const REPO_API = new Set(["create", "merge", "createQueryBuilder", "getId", "hasId", "extend", "metadata", "target", "manager"]);
 
@@ -45,7 +46,11 @@ function entities(ctx: FileContext) {
       const column = literal(join?.args[0]) ?? `${f.name}Id`;
       return [{ to: target, prop: f.name, column, indexed: rel.name === "OneToOne" || indexed(column) || indexed(f.name) }];
     });
-    ctx.node({ id, kind: "Table", name: table, repo: ctx.repo.name, file: ctx.file, line: cls.line, keys: [`table:${table}`, `entity:${cls.name}`], attrs: { entity: cls.name, relations } });
+    const columns = fields.flatMap((f) => {
+      const d = deco(f.decorators, COLUMNS);
+      return d ? [{ name: /name\s*:\s*['"`](\w+)['"`]/.exec(d.args.join(","))?.[1] ?? f.name, type: f.typeName ?? "" }] : [];
+    }).slice(0, 200);
+    ctx.node({ id, kind: "Table", name: table, repo: ctx.repo.name, file: ctx.file, line: cls.line, keys: [`table:${table}`, `entity:${cls.name}`], attrs: { entity: cls.name, relations, columns } });
     for (const r of relations) ctx.edge({ src: id, kind: "relates", dstKey: `entity:${r.to}`, line: cls.line, attrs: { column: r.column } });
   }
 }

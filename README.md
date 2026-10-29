@@ -12,10 +12,11 @@ See how your code flows, from a screen through the API and services down to data
             └─ customers.update → [external] Stripe   ⚠ called inside the transaction
 ```
 
-- **Local only.** No network calls, no telemetry. The index is a SQLite file on your machine. (The optional Claude chat in Designs uses your own Claude Code, see below.)
+- **Local only.** No network calls, no telemetry. The index is a SQLite file on your machine. (The optional Agent uses your own Claude Code, see below.)
 - **Works across repos and services.** It links frontend and backend, and service to service, through GraphQL operation names, REST paths and queue names, in any mix of languages.
-- **Three ways to use it:** a dashboard in the browser, a CLI for the terminal and CI, and an MCP server / Claude Code plugin.
+- **Three ways to use it:** a dashboard in the browser (with an Agent you can ask), a CLI for the terminal and CI, and an [MCP server](#mcp-flowmap-inside-your-ai-tool-once-per-machine) for your AI tool.
 - **Design before you code:** sketch a new feature on top of the real graph, with Claude or by hand, see what it would break, and export the RFC.
+- **Where it helps:** finding what a change affects across screens, APIs, tables and repos, and flagging risky patterns. It maps how code connects; it does not read function logic, so read the key functions too. On a small change in a small repo, your editor's own search is enough.
 - **TypeScript, JavaScript and Python**, with a plugin per framework:
 
 | Area | Supported |
@@ -25,6 +26,18 @@ See how your code flows, from a screen through the API and services down to data
 | Data | TypeORM, Prisma, Drizzle, SQLAlchemy, Django ORM, raw SQL |
 | Transactions, jobs | typeorm-transactional, Prisma / Drizzle / SQLAlchemy / Django transactions, BullMQ, Celery, cron |
 | Clients | Apollo, Redux Toolkit, fetch / axios / ofetch, requests / httpx, Stripe, AWS, mail and other SDKs |
+
+**Contents:** [Quick start](#quick-start) · [Install](#1-install-once-per-machine) · [Set up a repo](#2-set-up-a-repo-once-per-repo) · [Use it](#3-use-it-every-day) · [Design a feature](#design-a-feature-before-building-it) · [MCP](#mcp-flowmap-inside-your-ai-tool-once-per-machine) · [Rules](#rules) · [Troubleshooting](#troubleshooting) · [Limits](#limits)
+
+## Quick start
+
+```bash
+git clone <this-repo-url> flowmap && cd flowmap && npm install && npm run build   # once per machine
+cd packages/cli && npm link                                                       # adds the `flowmap` command
+cd /path/to/your-repo && flowmap init && flowmap dev                              # once per repo, then every day
+```
+
+`flowmap dev` opens the dashboard. Optional: add FlowMap to your AI tool ([MCP](#mcp-flowmap-inside-your-ai-tool-once-per-machine)), and ask the **Agent** (top right) about your code. Details below.
 
 ## 1. Install (once per machine)
 
@@ -59,6 +72,7 @@ export default {
   connect: ["../my-api"],      // repos this one calls; each has its own flowmap.config.mjs
   clients: [],                 // your API wrapper, e.g. [{ call: "api.request", opArg: 1 }]
   externals: {},               // your classes that call outside services, e.g. { PaymentsService: "Stripe" }
+  flags: [],                   // your feature-flag checks, e.g. [{ call: "useFeatureFlag" }]: code that calls one is marked "behind that flag"
   ignore: ["**/*.test.ts"],
   rules: {},                   // e.g. { "n-plus-one": "off" }
   base: "origin/main",         // branch to compare against
@@ -105,6 +119,7 @@ The first run parses the whole repo; after that only changed files are parsed. E
 | **Each session** | `flowmap dev` | Dashboard, kept up to date as you save |
 | **Before each PR** | `flowmap check` | New issues in your changed lines (exit code 1 on errors) |
 | **Reviewing a branch** | `flowmap changes` | APIs, screens and tables your branch affects |
+| **Reviewing a branch you have not checked out** | `flowmap changes --base main --head feature/x` | The same, for any two branches or tags. Git reads the branch itself, so your files and your current branch stay as they are |
 | **After a big `git pull`** (dashboard not running) | `flowmap index` | Index brought up to date |
 | **When needed** | `flowmap explain <name>` / `trace <name>` | What something does |
 | **When needed** | `flowmap impact <name>` | Who depends on it |
@@ -122,7 +137,7 @@ The first run parses the whole repo; after that only changed files are parsed. E
 - **Explorer:** ⌘K to search, then follow the flow. Transactions are amber, external services red, tables blue; "+N" expands more.
 - **Issues:** each one with why it matters and how to fix it.
 - **Rules:** what every rule checks, its severity and how many issues it has.
-- **Changes:** your branch compared with the base.
+- **Changes:** a branch compared with a base (pick any two, nothing is checked out). It starts with the branch you are on against your repo's `base` (set `base: "origin/develop"` in the config; the default is the main branch), and says which is which: a picture of the changed code and what it reaches (each box says whether it is **new** or **changed**; click one to see the lines that changed in it), the changed code with links and the same diff, the screens, APIs and tables affected, new issues, and a *Before you release* box (migrations, feature flags). **Copy review** gives the same as text. The first comparison of a branch indexes a copy of it in `.flowmap/refs/` (the last five are kept); one repo at a time, connected repos are read as they are.
 - **Tables:** who reads and writes each table.
 - **Designs:** plan a new feature on the real graph (see below).
 
@@ -153,40 +168,74 @@ flowmap screenshots           # captures every screen, signed in; re-run with --
 
 **Designs** (in the dashboard) is the same flow view as the App map, with your change drawn on top and editable:
 
-1. **New design** → describe the feature to **Claude** in the chat, or just start adding things. Claude reads the code, gives a short overview and the decisions to make, then draws the design; what it adds is marked for you to accept or reject. There is nothing to configure or pick: the tabs work from what the design changes.
+1. **New design** → describe the feature to the **Agent**, paste a rough RFC (**Import a draft**), or just start adding things. Claude reads the code, gives a short overview and the decisions to make, then draws the design; what it adds is marked for you to accept or reject. There is nothing to configure or pick: the tabs work from what the design changes.
    - **Changes** is the diagram of the design, about ten nodes: what changes (new, changing, removing), the arrows between them, and what they read, write or send out (tables, queues, outside services). The unchanged code a change merely calls folds behind a **+N** on the node; click it to show them.
    - **Flow** is the real flow of the code you change, drawn like the App map in repo / service boxes: the way from the screens, APIs and jobs down to your changes. Branches that lead nowhere near a change fold behind a **+N**.
    - **Full detail** is the whole flow with every service function, side effect, table and transaction. Repos with no change start folded; click one to open it.
 2. **Edit it yourself.** Everything is laid out automatically and re-tidies itself as you add, connect or fold things; drag a node to pin it where you want it (**Tidy** frees them again).
    - **Add** (toolbar, double-click the canvas, or drag from a node's dot onto empty space): a screen, API, function, table, external service, queue or job, connected from where you started. Type its name right away. ⌘K adds existing code.
+   - **Free shapes** (Add → Box, Decision, Text) are for anything that isn't code: a step, a question, a marketing or process flow. Give a box **points** (one per line) in the side panel. When the code for it exists, **Link to code…** turns the box into the real node and keeps its arrows. Boxes are left out of the checks and the *What changes* table; the RFC lists them as *Steps in the diagram*.
+   - **Tables show their columns** (TypeORM today) on the card, six at a time. Select a table → **Add a column**: the new columns appear in green on the card, and in the RFC under *Data changes*.
    - Drag from one node's dot to another to connect them; double-click a new node (or F2) to rename it; **Delete** removes it from the drawing; ⌘Z / ⇧⌘Z undo and redo; right-click a node for its actions.
    - Click any real node for its full detail, with **Modify it** / **Remove it**: that tells FlowMap what your design does to existing code, so Impact, the RFC and the later check know.
-   - Fold a repo box with its arrow; **Focus** hides the side panels; the sidebar, chat and details panel all collapse and stay that way.
+   - Fold a repo box with its arrow; **Focus** hides the side panels; the sidebar and details panel collapse and stay that way.
 3. **Impact** updates as you go: issues the design *would introduce* (a warning badge on the node) or resolve, tables it touches and who else uses them, screens that depend on what you change.
 4. **RFC** tab: write the **TL;DR** (2–3 lines: what changes, why, the impact, what reviewers must decide), record the decisions, and write only the reasoning (Problem, Goals and non-goals, Proposal, Alternatives considered, Risks and impact, Rollout) from the template or let Claude do it. **Preview** shows the finished document, with the diagram as the picture.
 5. **Export** has three groups. **RFC**: *Copy RFC* (paste into Notion or Linear), a `.md` download, or a `.zip` with the RFC and the picture for Notion's Import. **Diagram**: *Copy diagram image* (then ⌘V in Linear, Notion or Slack), or download it as PNG or SVG. The picture is the Changes view on a white background, with a title, a key, plain-words labels and numbers that match the *What changes* table. The RFC itself reads: status, Problem, TL;DR, **At a glance** (changes, tables touched, what reaches them, new issues) and the picture, your reasoning, then **What changes**, **Decisions** and **Impact**, written by FlowMap from the design.
 6. After building it: `flowmap check --design <name>`.
 
-The chat keeps **every conversation** about a design: the clock icon (History) lists them, opens one to carry on where you left off, or deletes it; the plus starts a new one without losing the others.
+**The Agent** (the button at the top right, on every page) is the one place to ask, and it drives the dashboard. Ask how something works and it answers from the real flow *and shows it*: the dashboard jumps to that flow. Ask it to go anywhere ("show the error issues", "compare `feature/x` with `main`", "open the service map"), or to design a feature, and it opens the page and starts drawing on the design canvas. Ask it to *draw* something ("how a nickname is saved, simple, 6 boxes") and it draws that, in your format, as an editable diagram instead of opening the exact flow. It knows which page you are on. It keeps **every conversation**: the clock icon (History) lists them, opens one to carry on where you left off, or deletes it; the plus starts a new one without losing the others. The header has a **model** picker (Default, Opus, Sonnet, Haiku: Claude Code's own names; each reply shows the exact model that answered) and, in browsers that support it, a **mic** for dictation (Chrome sends the audio to Google).
 
-Designs are saved in `.flowmap/designs/` (git-ignored, never committed). Share one with *Export → Download design (.json)* and **Import**.
+Designs are saved in `.flowmap/designs/` (git-ignored, never committed). Share one with *Export → Download design (.json)* and **Import**. The trash icon on a design in the list deletes it from your computer for good (no trash can). In the Agent, History → *Delete all conversations* does the same for the chat. Copies you exported or pasted elsewhere, and Claude Code's own session logs in its config folder, are not touched.
 
-**Claude in the dashboard** needs only [Claude Code](https://claude.com/claude-code) installed and signed in (`flowmap doctor` and the Designs page show what's missing). The chat runs your local `claude` in your repo, so it works like Claude Code in a terminal: your CLAUDE.md, settings, hooks, skills and connectors apply, plus FlowMap's design tools. The chat panel has a switch:
+**The Agent** needs only [Claude Code](https://claude.com/claude-code) installed and signed in (`flowmap doctor` and the Designs page show what's missing). It runs your local `claude` in your repo, so it works like Claude Code in a terminal: your CLAUDE.md, settings, hooks, skills and connectors apply, plus FlowMap's design tools. The panel has a switch:
 - **Full access** (default): everything a terminal session can do, including editing files and running commands. A headless run can't ask for approval, so tool use is approved up front; what Claude is doing is listed while it works, and **Stop** ends it. Settings that deny a tool still apply.
 - **Design only**: Claude can read code and edit the design, nothing else.
 
-Like any Claude Code session, the messages and the code it reads go to Anthropic. Without Claude, everything else in Designs works.
+Like any Claude Code session, the messages and the code it reads go to Anthropic.
 
-### With Claude Code (once per machine)
+**Without Claude**, the canvas, impact, RFC and export all work by hand (⌘K adds existing code), or connect another AI tool through [MCP](#mcp-flowmap-inside-your-ai-tool-once-per-machine). Designs are new: feedback is welcome.
 
-`flowmap init` offers to add the plugin. Or in Claude Code:
+## MCP: FlowMap inside your AI tool (once per machine)
+
+With MCP your AI tool asks FlowMap instead of reading files: who calls this, is it reachable from a screen, what would break, what a branch touches. It runs on your machine, over stdio.
+
+**Claude Code:** `flowmap init` offers to add the plugin. Or:
 
 ```text
 /plugin marketplace add /path/to/flowmap
 /plugin install flowmap@flowmap
 ```
 
-Restart Claude Code, then check that `/mcp` shows **flowmap**. `/flowmap:design` plans a feature from the terminal, on the same canvas. Claude can now trace flows, check impact and run `check` instead of reading large files. If its changes add new error-level issues, a Stop hook asks it to fix or explain them.
+Restart Claude Code and check that `/mcp` shows **flowmap**. The plugin also adds `/flowmap:flowmap` (use the graph instead of reading large files), `/flowmap:design` (plan a feature) and `/flowmap:review` (review a branch or PR without checking it out), and a Stop hook that asks Claude to fix or explain new error-level issues before it says "done".
+
+**Any other tool that supports MCP** (Cursor, Codex, Gemini CLI…): add this to its MCP settings, with your repo's path. For designs, also paste [the design instructions](claude-plugin/skills/design/SKILL.md) into its rules file. Only Claude Code has been tested.
+
+```json
+{ "mcpServers": { "flowmap": { "command": "flowmap", "args": ["mcp", "-w", "/path/to/your-repo"] } } }
+```
+
+**Two screens:** keep `flowmap dev` open on one screen and your AI tool on the other. The tools `show_flow`, `go_to`, `open_design` and `draw_diagram` move that dashboard for you ("show me how X works", "compare `feature/x` with `main`", "draw it simpler"). The place to go is passed through `.flowmap/nav.json`, which the running dashboard watches. If it isn't running, nothing moves and the answer still appears in your chat.
+
+**The tools** (every call first syncs the index with your files, usually under a second):
+
+| Tool | Ask it | You get |
+|---|---|---|
+| `search` | "find the nickname API" | Screens, APIs, functions, tables by name, with file and line |
+| `trace` | "what does setNickname do?" / "who uses it?" | The tree down (calls, reads, writes, outside calls, transactions) or up (what depends on it) |
+| `explain` | "explain UserService.remove" | One card: screens using it, guards, tables, outside calls, issues |
+| `tables` | "who writes `users`?" | Readers, writers and relations of a table |
+| `map` | "list all APIs", "which service calls which" | Every screen, API, job, or the service map |
+| `impact` | "what breaks if I change this?" | Every screen, API and job that depends on it |
+| `reachable` | "can a user reach this? is it behind a flag?" | The paths from screens to it |
+| `check` | "any new issues?" | The rules' findings in code you changed |
+| `changes` | "review `feature/x` against `main`" | What a branch touches, the screens, APIs and tables it reaches, new issues, migrations, feature flags. Give it `head` and nothing is checked out |
+| `design_context` | "design: archive users" | The current flow, related code, tables, naming style, what to read first |
+| `design_get` / `design_save` / `design_impact` | (the design flow) | Read, save and check a design; it appears live on the dashboard canvas, additions marked for you to accept |
+| `draw_diagram` | "draw how X works, simple, 6 boxes" | A picture in your own format (boxes with points, arrows), saved as a new design that opens on your canvas to edit, link to code and export. Not a change to the code |
+| `show_flow` / `open_design` / `go_to` | "show me how X works", "open the issues", "compare `feature/x` with `main`" | Moves your dashboard: a flow, a design, or any page (the Agent uses these to drive it) |
+
+Try: *"Who calls `UserService.remove`, and can a user reach it?"* · *"Review `feature/x` against `main`."* · *"Design: let admins archive users."*
 
 ## 4. First run on an existing codebase (once per codebase)
 
@@ -220,6 +269,7 @@ flowmap baseline update      # writes flowmap.baseline.json (accepted issues + t
 | `unguarded-operation` | An API without an auth guard |
 | `dead-reference` | Imports of missing files or exports |
 | `contract-drift` | The frontend calls an API the backend doesn't have, or a schema field has no resolver |
+| `risky-migration` | A migration that can lock a busy table or fail on one with rows: an index without `CONCURRENTLY`, a NOT NULL column with no default, a foreign key that validates under lock, a column type change, or `CONCURRENTLY` inside a transaction (PostgreSQL) |
 | `missing-fk-index` | A foreign-key column with no index in the model or any migration (skipped on MySQL, which adds them itself) |
 | `breaking-change` | An API recorded in the baseline was removed |
 | `write-on-get` | A GET endpoint or GraphQL query writes to the database |
@@ -243,6 +293,8 @@ Indexes are read from models (`@Index`, `@@index`, `index=True`) and from migrat
 | `No FlowMap config found` | Run inside a repo with `flowmap.config.mjs`, or run `flowmap init` |
 | `Dashboard is not built` | Run `npm run build` in the flowmap folder |
 | `EADDRINUSE` | Another dashboard is running; use `flowmap dev --port 4401` |
+| `/mcp` shows **flowmap** as failed ("Connection closed") | The server stops when it finds no FlowMap config in the folder your AI tool was opened in. Open the tool in the repo, run `flowmap init` there, or put `"-w", "/path/to/repo"` in the MCP args |
+| The Agent says Claude is missing | Install [Claude Code](https://claude.com/claude-code) and run `claude` once to sign in; `flowmap doctor` checks it |
 | Dashboard asks for the link | Open the full `?token=…` link printed by `flowmap dev` |
 | Results look wrong or stale | `flowmap index --full`, then `flowmap doctor` |
 
@@ -255,7 +307,7 @@ Plugins live in `packages/plugins` (see `bullmq.ts` for a short example). A plug
 **Working on FlowMap itself:** `npm run dev -- -w ../my-repo` restarts the server whenever FlowMap's code changes and keeps you logged in. Open the printed link once. Dashboard changes need `npm run build` and a browser refresh.
 
 **Security:**
-- The dashboard binds to localhost and requires a token cookie, and sends a strict CSP. Its API is read-only except two local writes, both inside `.flowmap/` and only from the dashboard itself (same origin + a custom header): capturing a screenshot and saving a design. The design chat runs your local `claude`; in "Full access" mode (the default) it can edit files and run commands in your repos, like a terminal session, and "Design only" limits it to reading code and editing the design.
+- The dashboard binds to localhost and requires a token cookie, and sends a strict CSP. Its API is read-only except local writes inside `.flowmap/` (git-ignored): capturing a screenshot, saving a design or a chat, and, when you compare branches, a cached copy of each branch (`.flowmap/refs/`, the last five kept). Writes from the dashboard need the same origin and a custom header. Git is run without a shell for branch names (they are checked first and never read as options), and only to read. The Agent runs your local `claude`; in "Full access" mode (the default) it can edit files and run commands in your repos, like a terminal session, and "Design only" limits it to reading code and editing the design.
 - FlowMap never edits source files or reads `.env`/key files.
 - Dependencies are few and pinned.
 
@@ -271,6 +323,8 @@ fixtures/           sample repos used by the tests
 
 ## Limits
 
+- The MCP tool list costs about 3,000 tokens at the start of each AI session. Answers are small (tens to a few hundred tokens each on a small project), so FlowMap pays off when it saves the AI from reading many files, not on a tiny question.
 - TypeScript, JavaScript and Python. Other languages need a tree-sitter adapter plus framework plugins.
 - Static analysis: dynamic calls and custom wrappers can hide links. Declare them in `clients` / `externals`.
+- It shows what connects to what, not what a function does inside. In side-by-side tests it found far more dependents than plain code reading, but missed logic details (such as a uniqueness check) that reading caught, and it was not cheaper in tokens. Use it for impact, then read the key functions.
 - `n-plus-one` also flags small fixed loops. Ignore those with a reason, or relax the rule.

@@ -102,7 +102,10 @@ export function formatRefs(groups: Record<string, Ref[]>): string {
 
 export function formatChanges(cs: ChangeSet): string {
   const out = cs.repos.map((r) => `${c("bold", r.name)} ${r.branch ?? "?"} vs ${r.base}: ${r.error ? c("red", r.error) : `${r.files.length} files changed`}`);
+  if (cs.changed.length) out.push("", c("bold", `Changed code (${cs.changed.length})`), ...cs.changed.map((r) => `  ${r.change === "new" ? c("green", "new    ") : c("yellow", "changed")} ${c("cyan", `[${KIND_TAG[r.kind] ?? r.kind}]`)} ${r.name}  ${c("dim", `${r.repo}/${r.file}:${r.line}`)}`));
   out.push("", formatRefs({ "Affected APIs": cs.affected.operations, "Affected screens": cs.affected.screens, "Tables touched": cs.affected.tables, "External services": cs.affected.externals }));
+  if (cs.migrations.length) out.push("", c("bold", `Migrations (${cs.migrations.length})`), ...cs.migrations.map((m) => `  ${m}`));
+  if (cs.flags.length) out.push("", c("bold", "Behind feature flags"), `  ${cs.flags.join(", ")}`);
   out.push("", c("bold", `New issues in changed code (${cs.issues.length})`), formatIssues(cs.issues, { why: true }));
   return out.join("\n");
 }

@@ -59,10 +59,16 @@ export interface ClientCallConfig {
   docArg?: number;         // argument holding a gql document
 }
 
+export interface FlagCallConfig {
+  call: string;            // "useFeatureFlag" or "flags.isEnabled"
+  arg?: number;            // argument holding the flag's name (default 0)
+}
+
 export interface FlowMapConfig {
   name: string;
   repos: RepoConfig[];
   clients: ClientCallConfig[];
+  flags: FlagCallConfig[];               // feature-flag checks: code that calls one is marked as behind that flag
   externals: Record<string, string>;     // class/identifier name -> external label
   afterCommit: string[];
   ignore: string[];

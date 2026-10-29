@@ -15,7 +15,9 @@ calls are same-origin (cookie sent automatically). No CORS. Requests with a fore
 | GET | `/api/issues?rule=&severity=&status=&repo=&q=` | `{ issues: Issue[]; summary: IssueSummary }` |
 | GET | `/api/rules` | `RuleInfo[]` |
 | GET | `/api/tables` | `TableInfo[]` |
-| GET | `/api/changes?base=<git ref>` | `ChangeSet` |
+| GET | `/api/changes?base=<git ref>&head=<git ref>` | `ChangeSet` (`head` omitted: your working folder; given: that branch, nothing checked out). `changed[].change` is `new` (the branch added all of it) or `changed` (it was there and was touched); `diffs` maps a node id to its changed lines |
+| GET | `/api/branches` | `{ branches, current, base }`: branch and tag names of the repo you work in, the one checked out, and the default base |
+| GET | `/api/claude/commands` | `{ name, description }[]`: the commands Claude Code itself reports it accepts (skills, plugin skills, built-ins that work headless), for the agent's `/` menu |
 | GET | `/api/events` | Server-Sent Events stream of `ServerEvent` JSON (`data:` lines) |
 | GET | `/api/designs` | `DesignSummary[]` |
 | GET | `/api/designs/:slug` | `DesignView` (design + nodes / edges as on the canvas, impact, chat) |
@@ -24,7 +26,10 @@ calls are same-origin (cookie sent automatically). No CORS. Requests with a fore
 | GET | `/api/claude` | `ClaudeStatus` (installed, signed in, plugin added; local checks) |
 | POST | `/api/designs/:slug` | Save a `Design` (`version` = the one you read, 0 to create) → `{ slug, version }` |
 | POST | `/api/designs` | Import a shared `Design` under a free name → `{ slug, version }` |
-| POST | `/api/designs/:slug/chat` | `{ text, mode? }` → `{}` (`mode`: `"full"` = everything a terminal Claude Code session can do, `"design"` = read code + edit the design only; default `"design"`). Claude's reply and what it is doing stream as `chat` events (`text`, `tool`, `done`, `error`). Also: `{ cancel: true }` stops the current answer → `{ stopped }`; `{ new: true }` opens a blank conversation; `{ open: id }` / `{ remove: id }` open or delete one (the `conversations` of `DesignView` list them). Kept per design in `<slug>.chat.json` |
+| GET | `/api/chat/:scope` | `{ chat, conversations }`: the agent's open conversation and its history (`scope`: `agent-chat`, or a design slug for older per-design chats) |
+| POST | `/api/designs/:slug/delete` | `{ confirm: true }` → `{}`: deletes the design file (and an older per-design chat file) for good; 404 if there is none |
+| POST | `/api/agent/chat` | the dashboard's agent: the body below plus `page?` (what the user is looking at); its `show_flow` / `open_design` tool calls arrive as `{ type: "ui", action: "flow" \| "design", id }` events |
+| POST | `/api/designs/:slug/chat` | `{ text, mode? }` → `{}` (`mode`: `"full"` = everything a terminal Claude Code session can do, `"design"` = read code + edit the design only; default `"design"`). Claude's reply and what it is doing stream as `chat` events (`text`, `tool`, `done`, `error`). Also: `{ cancel: true }` stops the current answer → `{ stopped }`; `{ new: true }` opens a blank conversation; `{ open: id }` / `{ remove: id }` open or delete one (`GET /api/chat/:scope` lists them); `{ clear: true }` deletes the whole history for good. Kept in `<scope>.chat.json` |
 
 **Writes** (the POSTs above and `POST /api/capture/:id`) need `Origin: http://<host>` and `x-flowmap: 1`; design POSTs also `Content-Type: application/json`, body ≤ 512 KB.
 Errors: 400 invalid name / design, 403 wrong origin or header, 404 unknown design, 409 the design changed since your `version` (read it again), 413 body too large, 415 not JSON.

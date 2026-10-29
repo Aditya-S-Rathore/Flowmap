@@ -80,7 +80,7 @@ const DOWN = /\b(?:async\s+)?down\s*\(|\bdef\s+downgrade\s*\(|\bdown\s*:|exports
 const UP = /\b(?:async\s+)?up\s*\(|\bdef\s+upgrade\s*\(|\bup\s*:|exports\.up\s*=/g;
 
 /** Blanks out rollback sections (from a down marker to the next up marker), keeping offsets and line numbers. */
-function withoutRollback(text: string) {
+export function withoutRollback(text: string) {
   const ups = [...text.matchAll(UP)].map((m) => m.index!);
   let out = text;
   for (const m of text.matchAll(DOWN)) {

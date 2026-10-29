@@ -3,6 +3,24 @@
 
 export type ViewMode = "changes" | "flow" | "full";
 
+/** A free element of the drawing (a step, a decision, a text). It is not code, so checks, counts and the RFC's change table leave it out. */
+export const isSketch = (n: { kind?: string }) => n.kind === "Box";
+
+/** Lines a card can show before the rest fold into "+N more", and what each line adds to its height. */
+export const MAX_LINES = 6;
+const LINE_H = 18;
+
+export interface Line { text: string; new?: boolean; column?: boolean }     // column: one the code has today
+
+/** The lines inside a node, what this design adds first: its own points or new columns, then the columns the code has today. */
+export function linesOf(n: { items?: Line[]; attrs?: Record<string, unknown> }): Line[] {
+  const columns = Array.isArray(n.attrs?.columns) ? (n.attrs.columns as { name: string; type?: string }[]).map((c) => ({ text: c.type ? `${c.name} ${c.type}` : c.name, column: true })) : [];
+  return [...(n.items ?? []), ...columns];
+}
+
+/** A card's height: `base`, plus a row per line shown (and one for "+N more"). */
+export const cardHeight = (base: number, lines: number) => base + (Math.min(lines, MAX_LINES) + (lines > MAX_LINES ? 1 : 0)) * LINE_H;
+
 export interface DesignNodeLike {
   id: string;
   change: "existing" | "new" | "changed" | "removed";
@@ -30,8 +48,8 @@ export function visibleDesignNodes<N extends DesignNodeLike>(nodes: N[], arrows:
 }
 
 /** "3 new · 5 changing": what a design does, in words. */
-export function summarize(nodes: Pick<DesignNodeLike, "change">[]): string {
-  const count = (c: DesignNodeLike["change"]) => nodes.filter((n) => n.change === c).length;
+export function summarize(nodes: (Pick<DesignNodeLike, "change"> & { kind?: string })[]): string {
+  const count = (c: DesignNodeLike["change"]) => nodes.filter((n) => n.change === c && !isSketch(n)).length;
   return [[count("new"), "new"], [count("changed"), "changing"], [count("removed"), "removing"]].filter(([n]) => n).map(([n, w]) => `${n} ${w}`).join(" · ");
 }
 
@@ -102,30 +120,25 @@ export function trim<N extends { id: string }>(nodes: N[], arrows: Arrow[], keep
   return { nodes: nodes.filter((n) => show.has(n.id)), hidden };
 }
 
+const SECTION = {
+  problem: "## Problem\n- What is wrong or missing today? Use numbers where you can.",
+  goals: "## Goals and non-goals\n- Goal:\n- Non-goal:",
+  proposal: "## Proposal\n1. First change: what, in one or two lines.",
+  alternatives: "## Alternatives considered\n- Option: why not.",
+  risks: "## Risks and impact\n- What could go wrong, and how it is limited.",
+  rollout: "## Rollout\n- Order of deploys, flags and migrations, and how to roll back.",
+};
+const join = (...keys: (keyof typeof SECTION)[]) => `${keys.map((k) => SECTION[k]).join("\n\n")}\n`;
+
 /** The sections people write. FlowMap writes the rest (TL;DR numbers, diagram, what changes, decisions, impact) from the design itself. */
-export const RFC_TEMPLATE = `## Problem
-- What is wrong or missing today? Use numbers where you can.
+export const RFC_TEMPLATE = join("problem", "goals", "proposal", "alternatives", "risks", "rollout");
 
-## Goals and non-goals
-- Goal:
-- Non-goal:
-
-## Proposal
-1. First change: what, in one or two lines.
-
-## Alternatives considered
-- Option: why not.
-
-## Risks and impact
-- What could go wrong, and how it is limited.
-
-## Rollout
-- Order of deploys, flags and migrations, and how to roll back.
-`;
+/** For a small change (one layer, one team): four sections are enough. */
+export const RFC_TEMPLATE_SHORT = join("problem", "proposal", "risks", "rollout");
 
 /** The changes in the order the RFC lists them (by repo, then as stored): the number on each box of the diagram and each row of the table. */
-export function numberChanges(nodes: { id: string; change: DesignNodeLike["change"]; repo: string }[]): Map<string, number> {
-  const changed = nodes.filter((n) => n.change !== "existing");
+export function numberChanges(nodes: { id: string; change: DesignNodeLike["change"]; repo: string; kind?: string }[]): Map<string, number> {
+  const changed = nodes.filter((n) => n.change !== "existing" && !isSketch(n));
   const repos = [...new Set(changed.map((n) => n.repo || "Shared"))];
   return new Map(repos.flatMap((r) => changed.filter((n) => (n.repo || "Shared") === r)).map((n, i) => [n.id, i + 1] as const));
 }

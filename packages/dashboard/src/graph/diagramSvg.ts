@@ -1,4 +1,4 @@
-import { changesKeep, numberChanges, summarize, trim } from "../../../core/src/design-view";
+import { cardHeight, changesKeep, isSketch, MAX_LINES, numberChanges, summarize, trim } from "../../../core/src/design-view";
 import type { DesignView, NodeKind } from "../types";
 import { EFFECT_WORD } from "./DesignGraph";
 import { layout } from "./layout";
@@ -13,7 +13,7 @@ const COLOR = { new: "#4f46e5", changed: "#d97706", removed: "#dc2626", existing
 const WORD = { new: "NEW", changed: "CHANGING", removed: "REMOVING", existing: "" } as const;
 const KIND: Record<NodeKind, string> = {
   Route: "SCREEN", Component: "COMPONENT", ClientCall: "CLIENT CALL", Operation: "API", Schema: "SCHEMA", Function: "FUNCTION",
-  Guard: "GUARD", Table: "TABLE", External: "OUTSIDE SERVICE", Job: "JOB", Queue: "QUEUE",
+  Guard: "GUARD", Table: "TABLE", External: "OUTSIDE SERVICE", Job: "JOB", Queue: "QUEUE", Box: "STEP",
 };
 const SANS = "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
@@ -44,24 +44,28 @@ export async function diagramSvg(v: DesignView): Promise<Diagram> {
   const numbers = numberChanges(v.nodes);
   const summary = summarize(v.design.nodes);
 
-  const { pos } = await layout(nodes.map((n) => n.id), edges.map((e, i) => ({ id: i, src: e.src, dst: e.dst })), undefined, () => ({ width: W, height: H }), GAP);
+  // what the design puts inside a node (points, new columns) is drawn under it, so a node is as tall as its lines
+  const size = new Map(nodes.map((n) => [n.id, { w: n.w ?? W, h: n.h ?? cardHeight(H, n.items?.length ?? 0) }]));
+  const hOf = (id: string) => size.get(id)?.h ?? H;
+  const wOf = (id: string) => size.get(id)?.w ?? W;
+  const { pos } = await layout(nodes.map((n) => n.id), edges.map((e, i) => ({ id: i, src: e.src, dst: e.dst })), undefined, (id) => ({ width: wOf(id), height: hOf(id) }), GAP);
   const xs = nodes.map((n) => pos.get(n.id)?.x ?? 0), ys = nodes.map((n) => pos.get(n.id)?.y ?? 0);
   const [x0, y0] = [Math.min(0, ...xs), Math.min(0, ...ys)];
-  const width = Math.max(620, Math.max(0, ...xs) - x0 + W + 2 * PAD);
-  const height = Math.max(0, ...ys) - y0 + H + HEAD + PAD;
+  const width = Math.max(620, Math.max(0, ...nodes.map((n) => (pos.get(n.id)?.x ?? 0) + wOf(n.id))) - x0 + 2 * PAD);
+  const height = Math.max(0, ...nodes.map((n) => (pos.get(n.id)?.y ?? 0) + hOf(n.id))) - y0 + HEAD + PAD;
   const at = (id: string) => ({ x: (pos.get(id)?.x ?? 0) - x0 + PAD, y: (pos.get(id)?.y ?? 0) - y0 + HEAD });
 
   const marker = (name: string, color: string) => `<marker id="${name}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="${color}"/></marker>`;
   // a word on an arrow goes at the first point along it that is clear of the boxes and of the words already placed
-  const boxes = nodes.map((n) => at(n.id));
+  const boxes = nodes.map((n) => ({ ...at(n.id), w: wOf(n.id), h: hOf(n.id) }));
   const words: { x: number; y: number; w: number }[] = [];
   const clear = (x: number, y: number, w: number) =>
     !words.some((o) => Math.abs(o.x - x) < (o.w + w) / 2 + 4 && Math.abs(o.y - y) < 24) &&
-    !boxes.some((b) => x + w / 2 > b.x - 4 && x - w / 2 < b.x + W + 4 && y + 10 > b.y - 4 && y - 10 < b.y + H + 4);
+    !boxes.some((b) => x + w / 2 > b.x - 4 && x - w / 2 < b.x + b.w + 4 && y + 10 > b.y - 4 && y - 10 < b.y + b.h + 4);
 
   const arrow = (e: (typeof edges)[number]) => {
     const [a, b] = [at(e.src), at(e.dst)];
-    const [sx, sy, tx, ty] = [a.x + W, a.y + H / 2, b.x, b.y + H / 2];
+    const [sx, sy, tx, ty] = [a.x + wOf(e.src), a.y + hOf(e.src) / 2, b.x, b.y + hOf(e.dst) / 2];
     const dx = Math.max(40, Math.abs(tx - sx) / 2);
     const color = e.change === "new" ? COLOR.new : e.change === "removed" ? COLOR.removed : COLOR.existing;
     const dash = e.change === "new" ? ' stroke-dasharray="6 4"' : e.change === "removed" ? ' stroke-dasharray="2 4"' : "";
@@ -82,16 +86,20 @@ export async function diagramSvg(v: DesignView): Promise<Diagram> {
 
   const box = (n: (typeof nodes)[number]) => {
     const { x, y } = at(n.id);
-    const c = COLOR[n.change];
-    const note = n.change !== "existing" ? n.note?.trim() : "";
+    const look = isSketch(n) ? "existing" : n.change;                   // a free box is drawn plain, not as a proposal
+    const c = isSketch(n) ? INK : COLOR[look];
+    const note = look !== "existing" ? n.note?.trim() : "";
     const main = wrap(note || n.name, 32, 2);
-    const kind = [KIND[n.kind], WORD[n.change]].filter(Boolean).join(" · ");
+    const kind = isSketch(n) ? (n.shape === "decision" ? "DECISION" : KIND.Box) : [KIND[n.kind], WORD[n.change]].filter(Boolean).join(" · ");
     const number = numbers.get(n.id);
+    const items = n.items ?? [];
+    const rows = [...items.slice(0, MAX_LINES).map((i) => `${n.kind === "Table" ? "+ " : "• "}${i.text}`), ...(items.length > MAX_LINES ? [`+${items.length - MAX_LINES} more`] : [])];
     return `<g opacity="${n.change === "removed" ? 0.8 : 1}">
-  <rect x="${x}" y="${y}" width="${W}" height="${H}" rx="10" fill="#fff" stroke="${c}" stroke-width="${n.change === "existing" ? 1.2 : 2}"${n.change === "new" ? ' stroke-dasharray="6 4"' : n.change === "removed" ? ' stroke-dasharray="3 3"' : ""}/>
+  <rect x="${x}" y="${y}" width="${wOf(n.id)}" height="${hOf(n.id)}" rx="${n.shape === "decision" ? 24 : 10}" fill="#fff" stroke="${n.shape === "text" ? "none" : c}" stroke-width="${look === "existing" ? 1.2 : 2}"${look === "new" ? ' stroke-dasharray="6 4"' : look === "removed" ? ' stroke-dasharray="3 3"' : ""}/>
   <text x="${x + 16}" y="${y + 20}" font-size="10" letter-spacing="0.6" font-weight="600" fill="${n.change === "existing" ? MUTED : c}">${esc(kind)}</text>
   ${main.map((l, i) => `<text x="${x + 16}" y="${y + 40 + i * 16}" font-size="13.5" font-weight="600" fill="${INK}"${n.change === "removed" ? ' text-decoration="line-through"' : ""}>${esc(l)}</text>`).join("\\n  ")}
   ${note ? `<text x="${x + 16}" y="${y + H - 9}" font-size="10.5" font-family="${MONO}" fill="${MUTED}">${esc(wrap(n.name, 38, 1)[0])}</text>` : ""}
+  ${rows.map((r, i) => `<text x="${x + 16}" y="${y + H + 8 + i * 18}" font-size="11.5" fill="${i === rows.length - 1 && items.length > MAX_LINES ? MUTED : INK}">${esc(wrap(r, 38, 1)[0])}</text>`).join("\n  ")}
   ${number ? `<circle cx="${x}" cy="${y}" r="12" fill="${c}"/><text x="${x}" y="${y + 4.5}" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">${number}</text>` : ""}
 </g>`;
   };

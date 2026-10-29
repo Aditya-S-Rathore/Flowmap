@@ -1,7 +1,7 @@
-import { Search, StickyNote, type LucideIcon } from "lucide-react";
+import { Diamond, Search, Square, StickyNote, Type, type LucideIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 import { KindIcon } from "../../components/kind";
-import type { NodeKind } from "../../types";
+import type { DesignNode, NodeKind } from "../../types";
 import { ADD_KINDS } from "./shared";
 
 export type Point = { x: number; y: number };
@@ -27,8 +27,8 @@ export function Popover({ at, label, onClose, children, width = "w-60" }: { at: 
 const item = "flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm hover:bg-muted";
 
 /** "Add": a screen, API, function, table… or existing code, or a note. Opened from the toolbar, a double-click or a dropped arrow. */
-export function QuickAdd({ at, fromName, onKind, onExisting, onNote, onClose }: {
-  at: Point; fromName?: string; onKind: (kind: NodeKind, name: string) => void; onExisting: () => void; onNote: () => void; onClose: () => void;
+export function QuickAdd({ at, fromName, onKind, onShape, onExisting, onNote, onClose }: {
+  at: Point; fromName?: string; onKind: (kind: NodeKind, name: string) => void; onShape: (shape: NonNullable<DesignNode["shape"]>) => void; onExisting: () => void; onNote: () => void; onClose: () => void;
 }) {
   return (
     <Popover at={at} label="Add" onClose={onClose}>
@@ -37,6 +37,11 @@ export function QuickAdd({ at, fromName, onKind, onExisting, onNote, onClose }: 
         <button key={kind} type="button" role="menuitem" onClick={() => { onKind(kind, name); onClose(); }} className={item}>
           <KindIcon kind={kind} />{label}
         </button>
+      ))}
+      <div className="my-1 border-t border-line" />
+      <p className="px-3 pt-0.5 pb-1 text-xs text-fg-subtle">Free shapes, for anything that isn't code</p>
+      {([["box", "Box", Square], ["decision", "Decision", Diamond], ["text", "Text", Type]] as const).map(([shape, label, Icon]) => (
+        <button key={shape} type="button" role="menuitem" onClick={() => { onShape(shape); onClose(); }} className={item}><Icon className="size-4 text-fg-muted" aria-hidden />{label}</button>
       ))}
       <div className="my-1 border-t border-line" />
       <button type="button" role="menuitem" onClick={() => { onExisting(); onClose(); }} className={item}><Search className="size-4 text-fg-muted" aria-hidden />Existing code…<kbd className="ml-auto text-xs text-fg-subtle">⌘K</kbd></button>

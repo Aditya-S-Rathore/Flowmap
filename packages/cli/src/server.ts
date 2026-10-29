@@ -9,8 +9,10 @@ import type { Engine } from "./engine.ts";
 import { Queries } from "./queries.ts";
 import { MapQueries } from "./map.ts";
 import { shotFile, type Variant } from "./shots.ts";
-import { claudeStatus, deleteConversation, MODELS, newConversation, openConversation, runChat, stopChat } from "./chat.ts";
-import { designFlow, designsDir, designView, importDesign, listDesigns, readDesign, saveDesign, SLUG, toMarkdown } from "./designs.ts";
+import { readNav } from "./nav.ts";
+import { branchInfo, changesBetween } from "./refs.ts";
+import { claudeCommands, claudeStatus, clearConversations, deleteConversation, MODELS, newConversation, openConversation, runChat, stopChat } from "./chat.ts";
+import { activeConversation, chatSummaries, deleteDesign, designFlow, designsDir, designView, GLOBAL_CHAT, importDesign, listDesigns, readChats, readDesign, saveDesign, SLUG, toMarkdown } from "./designs.ts";
 
 const DIST = fileURLToPath(new URL("../../dashboard/dist/", import.meta.url));
 const TYPES: Record<string, string> = {
@@ -70,6 +72,14 @@ export async function serveDashboard(engine: Engine, opts: { port: number; open:
     }, 100));
   });
 
+  // the MCP tools (your editor chat, or the Agent) leave the place to go in .flowmap/nav.json: tell the open dashboards
+  let navTimer: NodeJS.Timeout | undefined;
+  const navWatcher = watch(join(engine.ws.dir, ".flowmap"), (_ev, file) => {
+    if (file !== "nav.json") return;
+    clearTimeout(navTimer);
+    navTimer = setTimeout(() => { const nav = readNav(engine); if (nav) emit(nav); }, 50);
+  });
+
   const reindex = async () => {
     indexing = true;
     emit({ type: "indexing", phase: "updating" });
@@ -120,9 +130,14 @@ export async function serveDashboard(engine: Engine, opts: { port: number; open:
     if ((m = /^\/api\/wireframe\/(.+)$/.exec(path))) return map.wireframe(id(m[1]), Math.min(Number(p.get("depth") ?? 6), 8));
     if ((m = /^\/api\/spots\/(.+)$/.exec(path))) return map.shotSpots(id(m[1]), variant(p.get("variant")));
     if (path === "/api/tables") return q.tables();
-    if (path === "/api/changes") return q.changes(p.get("base") || undefined);
+    if (path === "/api/changes") return p.get("head") ? changesBetween(engine, p.get("base") || undefined, p.get("head")!) : q.changes(p.get("base") || undefined);
     if (path === "/api/designs") return listDesigns(engine.ws);
     if ((m = /^\/api\/designs\/([^/]+)$/.exec(path))) return designView(q, m[1]);
+    if (path === "/api/branches") return branchInfo(engine);
+    if ((m = /^\/api\/chat\/([^/]+)$/.exec(path))) {               // the agent's conversation for a design, or "agent-chat" when none is open
+      const chats = readChats(engine.ws, m[1]);
+      return { chat: activeConversation(chats).messages, conversations: chatSummaries(chats) };
+    }
     if ((m = /^\/api\/designs\/([^/]+)\/flow$/.exec(path))) return designFlow(q, map, readDesign(engine.ws, m[1]), p.get("mode") === "full" ? "full" : "compact");
     return undefined;
   };
@@ -162,24 +177,30 @@ export async function serveDashboard(engine: Engine, opts: { port: number; open:
     }
     // designs: save an edit (/api/designs/<slug>), import a shared one (/api/designs), or ask Claude (/api/designs/<slug>/chat).
     // Writes only into .flowmap/designs; Claude runs locally with read-only code access plus FlowMap's design tools.
-    const design = /^\/api\/designs(?:\/([^/]+)(\/chat)?)?$/.exec(url.pathname);
+    const design = /^\/api\/designs(?:\/([^/]+)(\/chat|\/delete)?)?$/.exec(url.pathname === "/api/agent/chat" ? `/api/designs/${GLOBAL_CHAT}/chat` : url.pathname);
     if (design && req.method === "POST") {
       if (req.headers.origin !== `http://${host}` || req.headers["x-flowmap"] !== "1") return send(res, 403, "Forbidden");
       if (!/^application\/json\b/.test(req.headers["content-type"] ?? "")) return send(res, 415, "Send JSON");
       return readBody(req).then((raw) => {
         const body = JSON.parse(raw);
-        const [, slug, chat] = design;
+        const [, slug, tail] = design;
+        const chat = tail === "/chat";
         let out: unknown;
-        if (chat) {
+        if (tail === "/delete") {
+          if (body.confirm !== true) return send(res, 400, "Send { confirm: true }: a deleted design cannot be brought back");
+          deleteDesign(engine.ws, slug);
+          out = {};
+        } else if (chat) {
           if (body.cancel === true) out = { stopped: stopChat(slug) };
           else if (body.new === true) { newConversation(engine, slug); out = {}; }
           else if (typeof body.open === "string") { openConversation(engine, slug, body.open); out = {}; }
           else if (typeof body.remove === "string") { deleteConversation(engine, slug, body.remove); out = {}; }
+          else if (body.clear === true) { clearConversations(engine, slug); out = {}; }
           else {
             if (typeof body.text !== "string" || !body.text.trim() || body.text.length > 20_000) return send(res, 400, "Send { text } (up to 20,000 characters)");
             if (body.mode !== undefined && body.mode !== "full" && body.mode !== "design") return send(res, 400, 'mode must be "full" or "design"');
             if (body.model !== undefined && body.model !== "" && !MODELS.includes(body.model)) return send(res, 400, `model must be one of: ${MODELS.join(", ")}`);
-            runChat(engine, slug, body.text, body.mode ?? "design", emit, opts.log, body.model || undefined);
+            runChat(engine, slug, body.text, body.mode ?? "design", emit, opts.log, body.model || undefined, typeof body.page === "string" ? body.page.slice(0, 200) : undefined);
             out = {};
           }
         } else {
@@ -206,6 +227,12 @@ export async function serveDashboard(engine: Engine, opts: { port: number; open:
       res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
       return res.end(readFileSync(file));
     }
+    if (url.pathname === "/api/claude/commands") {
+      return claudeCommands(engine).then((list) => {
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(list));
+      });
+    }
     if (url.pathname === "/api/claude") {
       return claudeStatus().then((s) => {
         res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
@@ -222,10 +249,11 @@ export async function serveDashboard(engine: Engine, opts: { port: number; open:
     }
     if (url.pathname.startsWith("/api/")) {
       try {
-        const body = api(url.pathname, url.searchParams);
-        if (body === undefined) return send(res, 404, "Not found");
-        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-        return res.end(JSON.stringify(body));
+        return Promise.resolve(api(url.pathname, url.searchParams)).then((body) => {         // a comparison of two branches takes a moment
+          if (body === undefined) return send(res, 404, "Not found");
+          res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+          res.end(JSON.stringify(body));
+        }, (err: any) => send(res, err.status ?? 400, String(err.message ?? err)));
       } catch (err: any) {
         return send(res, err.status ?? 400, String(err.message ?? err));
       }
@@ -247,6 +275,7 @@ export async function serveDashboard(engine: Engine, opts: { port: number; open:
     close() {
       watchers.forEach((w) => w.close());
       designWatcher.close();
+      navWatcher.close();
       designTimers.forEach((t) => clearTimeout(t));
       if (timer) clearTimeout(timer);
       clients.forEach((c) => c.end());

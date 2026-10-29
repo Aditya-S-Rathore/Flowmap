@@ -7,7 +7,7 @@ import { IssueRow } from "../../components/IssueRow";
 import { RefList } from "../../components/refs";
 import { Skeleton, input } from "../../components/ui";
 import type { Design, DesignView } from "../../types";
-import { DIAGRAM_MARKER, RFC_TEMPLATE } from "../../../../core/src/design-view";
+import { DIAGRAM_MARKER, RFC_TEMPLATE, RFC_TEMPLATE_SHORT } from "../../../../core/src/design-view";
 import { diagramSvg } from "../../graph/diagramSvg";
 import { btn, Field } from "./shared";
 
@@ -155,7 +155,10 @@ function Doc({ slug, draft, update, onSend, claudeBusy, flush }: { slug: string;
 
           <Field label={`The reasoning${draft.rfcBy ? ` · last edited by ${draft.rfcBy === "claude" ? "Claude" : "you"}` : ""}`}>
             {!draft.rfc.trim() && (
-              <button type="button" onClick={() => update((d) => ({ ...d, rfc: RFC_TEMPLATE }), "rfc")} className={`${btn} mb-2`}><FileText className="size-4" aria-hidden /> Start from the template</button>
+              <span className="mb-2 flex flex-wrap gap-2">
+                <button type="button" onClick={() => update((d) => ({ ...d, rfc: RFC_TEMPLATE_SHORT }), "rfc")} className={btn} title="Problem, Proposal, Risks, Rollout: for a small change"><FileText className="size-4" aria-hidden /> Short RFC</button>
+                <button type="button" onClick={() => update((d) => ({ ...d, rfc: RFC_TEMPLATE }), "rfc")} className={btn} title="Adds Goals and non-goals, and Alternatives: for a change across layers or teams"><FileText className="size-4" aria-hidden /> Full RFC</button>
+              </span>
             )}
             <textarea value={draft.rfc} onChange={(e) => update((d) => ({ ...d, rfc: e.target.value }), "rfc")} maxLength={100000} spellCheck
               placeholder={"## Problem\n## Goals and non-goals\n## Proposal\n## Alternatives considered\n## Risks and impact\n## Rollout"}

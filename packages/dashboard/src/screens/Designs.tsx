@@ -1,4 +1,4 @@
-import { DraftingCompass, FileUp, Plus } from "lucide-react";
+import { DraftingCompass, FileUp, Plus, Trash2, X } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { post, useApi } from "../api";
 import { Empty, ErrorState, PageHeader, Pill, SkeletonList, card, input } from "../components/ui";
@@ -18,6 +18,7 @@ export function Designs() {
   const { notify } = useApp();
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState<string | null>(null);
 
   const create = async (e: FormEvent) => {
     e.preventDefault();
@@ -35,6 +36,17 @@ export function Designs() {
       }
     }
     setBusy(false);
+  };
+
+  const remove = async (slug: string) => {
+    try {
+      await post(`/api/designs/${slug}/delete`, { confirm: true });
+      setConfirming(null);
+      notify("Design deleted");
+      reload();
+    } catch (err: any) {
+      notify(`Couldn't delete: ${err.message}`, true);
+    }
   };
 
   const importFile = async (file: File | undefined) => {
@@ -74,15 +86,25 @@ export function Designs() {
         ) : (
           <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {data.map((d) => (
-              <li key={d.slug}>
+              <li key={d.slug} className="relative">
                 <a href={`#/designs/${d.slug}`} className={`${card} flex h-full flex-col gap-2 p-4 hover:border-accent`}>
-                  <span className="font-medium">{d.title}</span>
+                  <span className="pr-16 font-medium">{d.title}</span>
                   {d.summary && <span className="line-clamp-2 text-sm text-fg-muted">{d.summary}</span>}
                   <span className="mt-auto flex items-center gap-2 pt-1 text-xs text-fg-subtle">
                     {ago(d.updatedAt)}
                     {d.pending > 0 && <Pill tone="accent">{d.pending} from Claude to review</Pill>}
                   </span>
                 </a>
+                <span className="absolute top-2.5 right-2.5 flex items-center gap-1">
+                  {confirming === d.slug ? (
+                    <>
+                      <button type="button" onClick={() => remove(d.slug)} className="rounded-md bg-error-soft px-2 py-1 text-xs font-medium text-error">Delete for good?</button>
+                      <button type="button" onClick={() => setConfirming(null)} aria-label="Keep it" className="rounded-md p-1 text-fg-muted hover:bg-muted"><X className="size-3.5" aria-hidden /></button>
+                    </>
+                  ) : (
+                    <button type="button" onClick={() => setConfirming(d.slug)} aria-label={`Delete “${d.title}”`} title="Delete this design from your computer" className="rounded-md p-1.5 text-fg-subtle hover:bg-muted hover:text-error"><Trash2 className="size-4" aria-hidden /></button>
+                  )}
+                </span>
               </li>
             ))}
           </ul>

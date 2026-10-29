@@ -77,6 +77,14 @@ test("dashboard server: token cookie, host check, writes only through guarded en
     assert.equal(view.design.title, "Test");
     assert.equal((await fetch(`${base}/api/designs/nope`, { headers: { cookie } })).status, 404);
     assert.match(await (await fetch(`${base}/api/designs/test/export`, { headers: { cookie } })).text(), /^# Test/);
+    // deleting is for good: it needs the guards and an explicit confirm, and a name that is not a design is refused
+    assert.equal((await post("/api/designs/test/delete", { confirm: true }, { "x-flowmap": "" })).status, 403);
+    assert.equal((await post("/api/designs/test/delete", {})).status, 400);
+    assert.equal((await post("/api/designs/..%2F..%2Fx/delete", { confirm: true })).status, 400);
+    assert.equal((await post("/api/designs/nope/delete", { confirm: true })).status, 404);
+    assert.equal((await post("/api/designs/test/delete", { confirm: true })).status, 200);
+    assert.equal((await fetch(`${base}/api/designs/test`, { headers: { cookie } })).status, 404);
+    assert.equal((await post("/api/agent/chat", { clear: true })).status, 200);
     assert.equal((await fetch(`${base}/..%2f..%2fpackage.json`, { headers: { cookie } })).status, 404);
     const page = await fetch(`${base}/`, { headers: { cookie } });
     assert.match(page.headers.get("content-security-policy")!, /script-src 'self' 'sha256-/);

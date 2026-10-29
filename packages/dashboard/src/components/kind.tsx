@@ -1,4 +1,4 @@
-import { AppWindow, ArrowLeftRight, Braces, Cloud, Component, Database, Layers, Route, Shield, SquareFunction, Timer, type LucideIcon } from "lucide-react";
+import { AppWindow, ArrowLeftRight, Braces, Cloud, Component, Database, Layers, Route, Shield, Square, SquareFunction, Timer, type LucideIcon } from "lucide-react";
 import type { NodeKind } from "../types";
 
 export const KIND: Record<NodeKind, { label: string; icon: LucideIcon; color: string }> = {
@@ -13,6 +13,7 @@ export const KIND: Record<NodeKind, { label: string; icon: LucideIcon; color: st
   External: { label: "External", icon: Cloud, color: "text-external" },
   Job: { label: "Job", icon: Timer, color: "text-fg-muted" },
   Queue: { label: "Queue", icon: Layers, color: "text-fg-muted" },
+  Box: { label: "Box", icon: Square, color: "text-fg-muted" },
 };
 
 export function KindIcon({ kind, className = "size-4" }: { kind: NodeKind; className?: string }) {

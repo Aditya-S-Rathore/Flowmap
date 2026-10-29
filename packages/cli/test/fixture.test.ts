@@ -196,7 +196,7 @@ test("MCP server answers over stdio", async () => {
     send({ method: "notifications/initialized" });
     send({ id: 2, method: "tools/list" });
     const tools = (await wait(2)).result.tools.map((t: any) => t.name).sort();
-    assert.deepEqual(tools, ["check", "design_context", "design_get", "design_impact", "design_save", "explain", "impact", "map", "reachable", "search", "tables", "trace"]);
+    assert.deepEqual(tools, ["changes", "check", "design_context", "design_get", "design_impact", "design_save", "draw_diagram", "explain", "go_to", "impact", "map", "open_design", "reachable", "search", "show_flow", "tables", "trace"]);
     send({ id: 3, method: "tools/call", params: { name: "explain", arguments: { target: "setNickname" } } });
     const text = (await wait(3)).result.content[0].text;
     assert.match(text, /caller check: no/);
@@ -205,6 +205,19 @@ test("MCP server answers over stdio", async () => {
     const ctx = (await wait(4)).result.content[0].text;
     assert.match(ctx, /Current flow from mutation setNickname/);
     assert.match(ctx, /Naming in this codebase/);
+    // the tools move the dashboard from outside it, through a checked file the running dashboard watches
+    const nav = () => JSON.parse(readFileSync(join(dir, "frontend", ".flowmap", "nav.json"), "utf8")).nav;
+    send({ id: 5, method: "tools/call", params: { name: "show_flow", arguments: { target: "setNickname" } } });
+    assert.ok(!(await wait(5)).result.isError);
+    assert.deepEqual([nav().action, nav().id.includes("setNickname")], ["flow", true]);
+    send({ id: 6, method: "tools/call", params: { name: "go_to", arguments: { page: "changes", base: "main", head: "feature/x" } } });
+    assert.ok(!(await wait(6)).result.isError);
+    assert.equal(nav().id, "changes?base=main&head=feature%2Fx");
+    send({ id: 7, method: "tools/call", params: { name: "draw_diagram", arguments: { title: "Nickname", steps: [{ key: "a", title: "Form" }, { key: "b", title: "API", code: "setNickname" }], arrows: [{ from: "a", to: "b" }] } } });
+    assert.match((await wait(7)).result.content[0].text, /design diagram-nickname/);
+    assert.deepEqual([nav().action, nav().id], ["design", "diagram-nickname"]);
+    send({ id: 8, method: "tools/call", params: { name: "draw_diagram", arguments: { title: "Bad", steps: [{ key: "a", title: "Form" }], arrows: [{ from: "a", to: "zzz" }] } } });
+    assert.ok((await wait(8)).result.isError, "an arrow to a missing step is refused");
   } finally {
     child.kill();
   }

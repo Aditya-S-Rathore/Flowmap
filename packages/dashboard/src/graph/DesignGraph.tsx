@@ -1,5 +1,7 @@
 import { Background, Controls, Handle, MarkerType, MiniMap, Panel, Position, ReactFlow, useNodesState, type Edge, type Node, type NodeProps, type ReactFlowInstance } from "@xyflow/react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { Diamond, MousePointer2, Square, Type } from "lucide-react";
+import { cardHeight, isSketch, linesOf } from "../../../core/src/design-view";
 import type { DesignEdgeView, DesignNodeView, DesignNote } from "../types";
 import { boxKind, C, Legend, toEdge } from "./FlowGraph";
 import { GroupBox, type GroupNode } from "./GroupBox";
@@ -37,6 +39,12 @@ const SummaryCard = memo(function SummaryCard({ data }: NodeProps<SummaryNode>) 
 
 const nodeTypes = { card: NodeCard, note: NoteCard, "group-box": GroupBox, summary: SummaryCard };
 
+/** A card is as tall as the lines inside it; a free box is the size you drew. */
+export const sizeOf = (n: DesignNodeView) => ({ width: n.w ?? NODE_W, height: n.h ?? cardHeight(NODE_H, linesOf(n).length) });
+
+export type Tool = "select" | "box" | "decision" | "text";
+export type Rect = { x: number; y: number; w: number; h: number };
+const TOOLS = [["select", "Select", MousePointer2, "V"], ["box", "Box", Square, "R"], ["decision", "Decision", Diamond, "D"], ["text", "Text", Type, "T"]] as const;
 const has = (n: { x?: number; y?: number; pinned?: boolean }) => !!n.pinned && n.x !== undefined && n.y !== undefined;
 const edgeSig = (e: { src: string; dst: string; kind: string }) => `${e.src}|${e.dst}|${e.kind}`;
 const PAD = { top: 48, side: 24, bottom: 24 };     // what the group box leaves around its nodes (as in the app's flow view)
@@ -77,7 +85,7 @@ function Key() {
  */
 export function DesignGraph({
   nodes, edges, notes, selected, editing, filter, collapsed, fitKey, getCenter, folded, opened,
-  onReveal, onSelect, onMove, onConnect, onDecide, onRename, onStopEdit, onToggleGroup, onEditNode, onQuickAdd, onContextMenu,
+  onReveal, onSelect, onMove, onConnect, onDecide, onRename, onStopEdit, onToggleGroup, onEditNode, onQuickAdd, onContextMenu, tool, onTool, onDraw, onResize, readOnly = false,
 }: {
   nodes: DesignNodeView[]; edges: DesignEdgeView[]; notes: DesignNote[]; selected: string | null; editing: string | null;
   filter: IssueFilter; collapsed: Set<string>; fitKey: string; getCenter: React.MutableRefObject<(() => Pos) | null>;
@@ -86,6 +94,8 @@ export function DesignGraph({
   onDecide: (id: string, accept: boolean) => void; onRename: (id: string, name: string) => void; onStopEdit: () => void;
   onToggleGroup: (group: string) => void; onEditNode: (id: string) => void;
   onQuickAdd: (at: { flow: Pos; client: Pos; from?: string; reverse?: boolean }) => void; onContextMenu: (id: string, client: Pos) => void;
+  tool: Tool; onTool: (tool: Tool) => void; onDraw: (shape: Exclude<Tool, "select">, rect: Rect) => void; onResize: (id: string, rect: Rect) => void;
+  readOnly?: boolean;                 // a picture to look at (the Changes page): no drawing tools, no connecting
 }) {
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<AnyNode>([]);
   const [placed, setPlaced] = useState<Map<string, Pos>>();
@@ -117,13 +127,14 @@ export function DesignGraph({
   }, [nodes, edges, collapsed]);
 
   // 2. when that structure changes, lay it out again (ELK in a worker); positions are not saved, only pins are
-  const structure = useMemo(() => JSON.stringify([view.shown.map((n) => [n.id, n.group]).sort(), view.summaries.map((s) => s.g), view.drawn.map((e) => [e.src, e.dst]).sort()]), [view]);
+  const structure = useMemo(() => JSON.stringify([view.shown.map((n) => [n.id, n.group, linesOf(n).length]).sort(), view.summaries.map((s) => s.g), view.drawn.map((e) => [e.src, e.dst]).sort()]), [view]);
   useEffect(() => {
     let live = true;
     const ids = [...view.shown.map((n) => n.id), ...view.summaries.map((s) => `group:${s.g}`)];
     const groups = new Map(view.shown.map((n) => [n.id, n.group]));
+    const size = new Map(view.shown.map((n) => [n.id, sizeOf(n)]));
     for (const s of view.summaries) groups.set(`group:${s.g}`, `group:${s.g}`);       // a folded repo is laid out like any node (in a box of its own)
-    layout(ids, view.drawn.map((e, i) => ({ id: i, src: e.src, dst: e.dst })), groups, undefined, ROOMY).then(({ pos, boxes }) => {
+    layout(ids, view.drawn.map((e, i) => ({ id: i, src: e.src, dst: e.dst })), groups, (id) => size.get(id) ?? { width: NODE_W, height: NODE_H }, ROOMY).then(({ pos, boxes }) => {
       if (!live) return;
       const box = new Map(boxes.map((b) => [b.id, b]));
       const abs = new Map<string, Pos>();
@@ -152,7 +163,7 @@ export function DesignGraph({
     const boxes: GroupNode[] = names.size + view.summaries.length > 1 ? [...names].map((g) => {
       const mine = cards.filter((c) => c.n.group === g);
       const [x0, y0] = [Math.min(...mine.map((c) => c.p.x)), Math.min(...mine.map((c) => c.p.y))];
-      const [x1, y1] = [Math.max(...mine.map((c) => c.p.x)) + NODE_W, Math.max(...mine.map((c) => c.p.y)) + NODE_H];
+      const [x1, y1] = [Math.max(...mine.map((c) => c.p.x + sizeOf(c.n).width)), Math.max(...mine.map((c) => c.p.y + sizeOf(c.n).height))];
       return {
         id: `group:${g}`, type: "group-box", position: { x: x0 - PAD.side, y: y0 - PAD.top },
         style: { width: x1 - x0 + 2 * PAD.side, height: y1 - y0 + PAD.top + PAD.bottom, pointerEvents: "none" },
@@ -166,13 +177,14 @@ export function DesignGraph({
       ...view.summaries.map((s): SummaryNode => ({ id: `group:${s.g}`, type: "summary", position: placed.get(`group:${s.g}`) ?? { x: 0, y: 0 }, data: { label: s.g, count: s.count, onOpen: () => onToggleGroup(s.g) } })),
       ...cards.map(({ n, p }): CardNode => ({
         id: n.id, type: "card", position: p, selected: n.id === selected,
+        ...(isSketch(n) ? sizeOf(n) : {}),                       // a free box has its own size; the resize handles change it
         data: {
-          view: n, isRoot: false, dir: "down", onExpand: onReveal, hidden: opened.has(n.id) ? 0 : folded.get(n.id) ?? 0, open: opened.has(n.id), onDecide, connectable: true, onRename, onStopEdit, editing: n.id === editing,
+          view: n, isRoot: false, dir: "down", onExpand: onReveal, hidden: opened.has(n.id) ? 0 : folded.get(n.id) ?? 0, open: opened.has(n.id), onDecide, connectable: !readOnly, onRename, onStopEdit, onResize, editing: n.id === editing,
           dimmed: filter === "issues" ? !n.issueCount : filter === "introduced" ? !n.introduced : false,
         },
       })),
     ]);
-  }, [placed, view, nodes, edges, notes, selected, editing, filter, folded, opened, onReveal, onDecide, onRename, onStopEdit, onToggleGroup, setRfNodes]);
+  }, [placed, view, nodes, edges, notes, selected, editing, filter, folded, opened, onReveal, onDecide, onRename, onStopEdit, onResize, onToggleGroup, readOnly, setRfNodes]);
 
   // 4. fit the view when the drawing is new (first open, another start point, detail level, Tidy), not on every edit.
   //    Like the app's flow view: everything if it stays readable, else the start node and what is next to it.
@@ -201,8 +213,29 @@ export function DesignGraph({
     return { x: p.clientX, y: p.clientY };
   };
 
+  // drawing: with a shape tool, a drag on the canvas draws it (a plain click drops a default-sized one)
+  const [drag, setDrag] = useState<{ from: Pos; to: Pos } | null>(null);
+  const finishDraw = () => {
+    if (!drag || tool === "select" || !flow.current) return setDrag(null);
+    const [a, b] = [flow.current.screenToFlowPosition(drag.from), flow.current.screenToFlowPosition(drag.to)];
+    const small = Math.hypot(drag.to.x - drag.from.x, drag.to.y - drag.from.y) < 12;
+    onDraw(tool, small ? { x: a.x - 80, y: a.y - 36, w: 160, h: 72 } : { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) });
+    setDrag(null);
+    onTool("select");
+  };
+  const origin = wrap.current?.getBoundingClientRect();
+
   return (
-    <div ref={wrap} className={`h-full w-full ${animating ? "design-animating" : ""}`}>
+    <div ref={wrap} className={`relative h-full w-full ${animating ? "design-animating" : ""}`}>
+      {tool !== "select" && (
+        <div className="absolute inset-0 z-10 cursor-crosshair touch-none" role="presentation"
+          onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); setDrag({ from: { x: e.clientX, y: e.clientY }, to: { x: e.clientX, y: e.clientY } }); }}
+          onPointerMove={(e) => drag && setDrag({ from: drag.from, to: { x: e.clientX, y: e.clientY } })}
+          onPointerUp={finishDraw}>
+          {drag && origin && <div className="pointer-events-none absolute rounded-lg border-2 border-dashed border-accent bg-accent-soft/40"
+            style={{ left: Math.min(drag.from.x, drag.to.x) - origin.left, top: Math.min(drag.from.y, drag.to.y) - origin.top, width: Math.abs(drag.to.x - drag.from.x), height: Math.abs(drag.to.y - drag.from.y) }} />}
+        </div>
+      )}
       <ReactFlow nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes} onNodesChange={onNodesChange}
         onInit={(i) => {
           flow.current = i;
@@ -229,11 +262,19 @@ export function DesignGraph({
           const client = clientOf(e);
           onQuickAdd({ flow: flow.current.screenToFlowPosition(client), client, from: s.fromNode.id, reverse: s.fromHandle?.type === "target" });
         }}
-        nodesDraggable nodesConnectable elementsSelectable={false} deleteKeyCode={null} zoomOnDoubleClick={false} minZoom={0.1}>
+        nodesDraggable nodesConnectable={!readOnly} elementsSelectable={false} deleteKeyCode={null} zoomOnDoubleClick={false} minZoom={0.1}>
         <Background gap={24} size={1} />
         <Controls showInteractive={false} position="bottom-left" />
         <MiniMap pannable zoomable position="bottom-right" nodeColor={(n) => (n.type === "group-box" ? "transparent" : n.type === "note" ? "#f59e0b" : n.type === "card" && (n as CardNode).data.view.issueCount ? C.external : C.neutral)} />
         <Panel position="top-right"><div className="flex flex-col items-end gap-2"><Key /><Legend /></div></Panel>
+        {!readOnly && <Panel position="top-left">
+          <div role="toolbar" aria-label="Drawing tools" className="relative z-20 flex gap-0.5 rounded-lg border border-line bg-bg p-0.5 shadow-sm">
+            {TOOLS.map(([t, label, Icon, key]) => (
+              <button key={t} type="button" aria-pressed={tool === t} aria-label={label} title={`${label} (${key})${t === "select" ? "" : ": drag on the canvas to draw it"}`} onClick={() => onTool(t)}
+                className={`rounded-md p-1.5 ${tool === t ? "bg-accent text-bg" : "text-fg-muted hover:bg-muted hover:text-fg"}`}><Icon className="size-4" aria-hidden /></button>
+            ))}
+          </div>
+        </Panel>}
       </ReactFlow>
     </div>
   );

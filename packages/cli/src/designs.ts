@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as z from "zod";
-import { changesKeep, DIAGRAM_MARKER, numberChanges, RFC_TEMPLATE, summarize, trim, type Arrow } from "@flowmap/core";
+import { changesKeep, DIAGRAM_MARKER, isSketch, numberChanges, RFC_TEMPLATE, RFC_TEMPLATE_SHORT, summarize, trim, type Arrow } from "@flowmap/core";
 import type { Edge } from "@flowmap/core";
 import type {
   ChatSummary, Design, DesignAuthor, DesignChat, DesignEdgeView, DesignFlow, DesignImpact, DesignNode, DesignNodeView, DesignSummary, DesignView, EdgeKind,
@@ -14,7 +14,7 @@ import type { Queries } from "./queries.ts";
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const NEW_ID = /^new:[a-z0-9-]{1,48}$/;
-const KINDS = ["Route", "Component", "ClientCall", "Operation", "Schema", "Function", "Guard", "Table", "External", "Job", "Queue"] as const satisfies readonly NodeKind[];
+const KINDS = ["Route", "Component", "ClientCall", "Operation", "Schema", "Function", "Guard", "Table", "External", "Job", "Queue", "Box"] as const satisfies readonly NodeKind[];
 const EDGE_KINDS = ["renders", "calls", "requests", "handles", "guarded_by", "decorated_by", "reads", "writes", "calls_external", "enqueues", "triggers", "defines", "relates", "navigates"] as const satisfies readonly EdgeKind[];
 const HIDDEN: EdgeKind[] = ["guarded_by", "decorated_by", "relates"];
 const BOUNDARY: NodeKind[] = ["Route", "Operation", "Job", "Queue", "Table", "External"];
@@ -51,6 +51,10 @@ const DesignSchema = z.object({
     transactional: z.boolean().optional(),
     guards: z.array(str(100)).max(20).optional(),
     note: str(2000).optional(),
+    items: z.array(z.object({ text: str(300), new: z.boolean().optional() })).max(100).optional(),
+    shape: z.enum(["box", "decision", "text"]).optional(),
+    w: z.number().min(40).max(4000).optional(),
+    h: z.number().min(24).max(4000).optional(),
     x: coord.optional(),
     y: coord.optional(),
     pinned: z.boolean().optional(),
@@ -141,6 +145,8 @@ export function writeDesign(ws: Workspace, slug: string, d: Design): Design {
 export interface Conversation { id: string; title: string; updatedAt: string; session?: string; messages: DesignChat["messages"] }
 export interface ChatStore { active: string; conversations: Conversation[] }
 
+/** The chat scope of the agent when no design is open (its history lives in .flowmap/designs/agent-chat.chat.json). */
+export const GLOBAL_CHAT = "agent-chat";
 export const CONVERSATION_ID = /^c-[a-z0-9]{1,24}$/;
 export const MAX_CONVERSATIONS = 20;
 export const conversationId = () => `c-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
@@ -209,13 +215,28 @@ export function saveDesign(ws: Workspace, slug: string, raw: unknown, by: Design
     const edges = new Set(prev?.edges.map((e) => e.id));
     d.nodes = d.nodes.map((n) => {
       const old = nodes.get(n.id);
-      return old ? { ...n, x: old.x, y: old.y, ...(old.pinned !== undefined ? { pinned: old.pinned } : {}), ...(old.keep ? { keep: true } : {}) } : { ...n, author: "claude" as const, pending: n.change !== "existing" || undefined };
+      return old ? { ...n, x: old.x, y: old.y, ...(old.pinned !== undefined ? { pinned: old.pinned } : {}), ...(old.keep ? { keep: true } : {}), ...(old.w ? { w: old.w, h: old.h } : {}) } : { ...n, author: "claude" as const, pending: n.change !== "existing" || undefined };
     });
     d.edges = d.edges.map((e) => (edges.has(e.id) ? e : { ...e, author: "claude" as const, pending: true }));
     const notes = new Set(prev?.notes.map((n) => n.id));
     d.notes = d.notes.map((n) => (notes.has(n.id) ? n : { ...n, author: "claude" as const }));
   }
   return writeDesign(ws, slug, d);
+}
+
+/** Deletes a design and its older per-design chat file for good: nothing goes to a trash. Refuses a symlink, and a name that is not a design. */
+export function deleteDesign(ws: Workspace, slug: string): void {
+  const file = designFile(ws, slug);
+  if (!existsSync(file)) throw new DesignError(`No design "${slug}".`, 404);
+  unlinkSync(file);
+  const chat = chatFile(ws, slug);
+  if (existsSync(chat) && !lstatSync(chat).isSymbolicLink()) unlinkSync(chat);
+}
+
+/** Deletes every conversation of a chat scope for good (the agent's history is `GLOBAL_CHAT`). */
+export function clearChats(ws: Workspace, slug: string): void {
+  const file = chatFile(ws, slug);
+  if (existsSync(file) && !lstatSync(file).isSymbolicLink()) unlinkSync(file);
 }
 
 /** Adds a shared design file under a free name derived from its title. */
@@ -233,7 +254,7 @@ const proposedView = (n: DesignNode) => ({
   id: n.id, kind: n.kind, name: n.name, repo: n.repo, file: n.file ?? "", line: 0, transactional: !!n.transactional, inTx: false,
   issueCount: 0, maxSeverity: null, outCount: 0, inCount: 0, attrs: { proposed: true },
   // the box it is drawn in: its repo, like real nodes; outside things by kind
-  group: n.repo || (n.kind === "External" ? "External services" : n.kind === "Queue" ? "Queues" : n.kind === "Table" ? "Database" : "Proposed"),
+  group: n.repo || (n.kind === "External" ? "External services" : n.kind === "Queue" ? "Queues" : n.kind === "Table" ? "Database" : n.kind === "Box" ? "Sketch" : "Proposed"),
 });
 
 export function designView(q: Queries, slug: string, d = readDesign(q.e.ws, slug)): DesignView {
@@ -245,7 +266,7 @@ export function designView(q: Queries, slug: string, d = readDesign(q.e.ws, slug
     const introduced = impact.introduced.filter((i) => i.nodeId === n.id);
     const issueCount = base.issueCount + introduced.length;
     const maxSeverity = base.maxSeverity === "error" || introduced.some((i) => i.severity === "error") ? "error" : issueCount ? "warn" : null;
-    return { ...base, issueCount, maxSeverity, introduced: introduced.length, change: n.change, author: n.author, pending: n.pending, x: n.x, y: n.y, note: n.note, keep: n.keep };
+    return { ...base, issueCount, maxSeverity, introduced: introduced.length, change: n.change, author: n.author, pending: n.pending, x: n.x, y: n.y, note: n.note, items: n.items, shape: n.shape, w: n.w, h: n.h, keep: n.keep };
   });
   const ids = new Set(nodes.map((n) => n.id));
   const seen = new Set<string>();
@@ -263,8 +284,7 @@ export function designView(q: Queries, slug: string, d = readDesign(q.e.ws, slug
   d.edges.filter((e) => e.change === "new" && ids.has(e.src) && ids.has(e.dst)).forEach((e, i) => edges.push({
     id: -(i + 1), src: e.src, dst: e.dst, kind: e.kind, confidence: "exact", file: "", line: 0, attrs: {}, designId: e.id, change: "new", pending: e.pending,
   }));
-  const chats = readChats(q.e.ws, slug);
-  return { slug, design: d, nodes, edges, stale, impact, chat: activeConversation(chats).messages, conversations: chatSummaries(chats) };
+  return { slug, design: d, nodes, edges, stale, impact };
 }
 
 /** Builds the design on a copy of the graph and runs the rules on it: issues it would add or remove, tables and code it touches. */
@@ -273,7 +293,7 @@ export function designImpact(q: Queries, d: Design): DesignImpact {
   return q.cached(`design:${createHash("sha1").update(shape).digest("hex")}`, () => {
     const g = q.e.graph;
     const removed = new Set(d.nodes.filter((n) => n.change === "removed").map((n) => n.id));
-    const added = new Map<string, GraphNode>(d.nodes.filter((n) => n.change === "new").map((n) => [n.id, {
+    const added = new Map<string, GraphNode>(d.nodes.filter((n) => n.change === "new" && !isSketch(n)).map((n) => [n.id, {
       id: n.id, kind: n.kind, name: n.name, repo: n.repo, file: n.file ?? "", line: 0, endLine: 0, keys: [],
       attrs: { proposed: true, transactional: !!n.transactional, guards: n.guards ?? [], permissions: [] },
     }]));
@@ -388,7 +408,7 @@ const edgeKey = (e: { src: string; dst: string | null; kind: string }) => `${e.s
 
 const TAG: Record<NodeKind, string> = {
   Route: "screen", Component: "component", ClientCall: "client", Operation: "api", Schema: "schema", Function: "fn",
-  Guard: "guard", Table: "table", External: "external", Job: "job", Queue: "queue",
+  Guard: "guard", Table: "table", External: "external", Job: "job", Queue: "queue", Box: "box",
 };
 const LAYER: [string, NodeKind[]][] = [
   ["UI", ["Route", "Component", "ClientCall"]], ["API", ["Operation", "Schema"]], ["Logic", ["Function", "Guard", "Job"]],
@@ -463,7 +483,7 @@ function atAGlance(v: DesignView): string {
 
 function whatChanges(v: DesignView): string {
   const numbers = numberChanges(v.nodes);
-  const changed = v.nodes.filter((n) => n.change !== "existing").sort((a, b) => numbers.get(a.id)! - numbers.get(b.id)!);
+  const changed = v.nodes.filter((n) => n.change !== "existing" && !isSketch(n)).sort((a, b) => numbers.get(a.id)! - numbers.get(b.id)!);
   const repos = [...new Set(changed.map((n) => n.repo || "Shared"))];
   const blocks = repos.map((repo) => {
     const rows = changed.filter((n) => (n.repo || "Shared") === repo).map((n) => {
@@ -473,6 +493,20 @@ function whatChanges(v: DesignView): string {
     return `${repos.length > 1 ? `### ${repo}\n` : ""}| # | Change | What | Where | Note |\n|---|---|---|---|---|\n${rows.join("\n")}`;
   });
   return blocks.length ? `## What changes\n${blocks.join("\n\n")}` : "";
+}
+
+/** Columns the design adds, per table. */
+function dataChanges(d: Design): string {
+  const rows = d.nodes.filter((n) => n.kind === "Table" && n.items?.length).map((n) =>
+    `- \`${cell(n.name)}\` (${n.change === "new" ? "new table" : "changing"}): ${n.items!.map((i) => `${n.change === "new" ? "" : "+ "}\`${cell(i.text)}\``).join(", ")}`);
+  return rows.length ? `## Data changes\n${rows.join("\n")}` : "";
+}
+
+/** The free boxes of the drawing, left to right as drawn: the steps of a flow that is not code. */
+function steps(d: Design): string {
+  const rows = d.nodes.filter(isSketch).sort((a, b) => (a.x ?? 0) - (b.x ?? 0) || (a.y ?? 0) - (b.y ?? 0)).filter((n) => n.shape !== "text" || n.items?.length)
+    .map((n) => `- **${cell(n.name)}**${n.items?.length ? `: ${n.items.map((i) => cell(i.text)).join("; ")}` : ""}`);
+  return rows.length ? `## Steps in the diagram\n${rows.join("\n")}` : "";
 }
 
 function impactSection(v: DesignView, notes: string): string {
@@ -497,7 +531,7 @@ export function toMarkdown(v: DesignView): string {
   const parsed = splitRfc(d.rfc);
   const intro = parsed.intro;
   // a section still holding the template's own placeholder text has not been written yet: leave it out
-  const untouched = new Map(splitRfc(RFC_TEMPLATE).sections.map((s) => [s.title.toLowerCase(), s.body]));
+  const untouched = new Map(splitRfc(RFC_TEMPLATE + RFC_TEMPLATE_SHORT).sections.map((s) => [s.title.toLowerCase(), s.body]));
   const sections = parsed.sections.map((s) => (untouched.get(s.title.toLowerCase()) === s.body ? { ...s, body: "" } : s));
   const take = (re: RegExp) => { const i = sections.findIndex((s) => re.test(s.title)); return i < 0 ? undefined : sections.splice(i, 1)[0]; };
   const tldr = d.summary.trim() || take(/^(summary|tl;?dr)\b/i)?.body || "";
@@ -522,7 +556,7 @@ export function toMarkdown(v: DesignView): string {
     `## At a glance\n${atAGlance(v)}\n\n${DIAGRAM_MARKER}${folded ? `\n_Unchanged code the changes only touch in passing (${folded} node${folded === 1 ? "" : "s"}) is left out._` : ""}`,
     intro,
     goals, proposal,
-    whatChanges(v),
+    whatChanges(v), dataChanges(d), steps(d),
     decisions.length ? `## Decisions\n| Decision | Choice |\n|---|---|\n${decisions.map((x) => `| ${cell(x.question)} | ${cell(x.answer)} |`).join("\n")}` : "",
     alternatives,
     impactSection(v, risks.length > 120 ? risks : ""),
@@ -547,12 +581,13 @@ export function checkDesign(q: Queries, d: Design, base?: string): DesignCheck {
   const built = (n: DesignNode) => [...g.nodes.values()].find((x) => x.kind === n.kind && (!n.repo || x.repo === n.repo) &&
     (lower(x.name) === lower(n.name) || (x.kind === "Table" && lower(x.attrs.entity) === lower(n.name))));
   const real = new Map(d.nodes.map((n) => [n.id, n.change === "new" ? built(n)?.id : g.nodes.has(n.id) ? n.id : undefined]));
-  const planned: DesignCheck["planned"] = d.nodes.filter((n) => n.change !== "existing").map((n) => ({
+  const sketch = new Set(d.nodes.filter(isSketch).map((n) => n.id));      // a free box is not code: nothing to find in it
+  const planned: DesignCheck["planned"] = d.nodes.filter((n) => n.change !== "existing" && !sketch.has(n.id)).map((n) => ({
     name: n.name, kind: n.kind, change: n.change,
     status: n.change === "new" ? (real.get(n.id) ? "done" : "missing") : n.change === "removed" ? (g.nodes.has(n.id) ? "missing" : "done") : changedIds.has(n.id) ? "done" : "unchanged",
   }));
   const name = (id: string) => d.nodes.find((n) => n.id === id)?.name ?? id;
-  for (const e of d.edges.filter((x) => x.change === "new")) {
+  for (const e of d.edges.filter((x) => x.change === "new" && !sketch.has(x.src) && !sketch.has(x.dst))) {
     const [src, dst] = [real.get(e.src), real.get(e.dst)];
     // UI → API in code goes through components and client calls, so "connected" means reachable in a few hops
     const ok = !!src && !!dst && g.walk(src, (id) => g.outEdges(id).filter((x) => x.dst), 4).has(dst);
@@ -570,6 +605,12 @@ export function checkDesign(q: Queries, d: Design, base?: string): DesignCheck {
 // ---------- context for Claude ----------
 
 /** What Claude needs before proposing a design: the current flow, related code, tables, open issues and the repo's naming style. */
+/** " · columns: id, email, …" for a table that lists them. */
+const columnsOf = (n?: GraphNode) => {
+  const cols = Array.isArray(n?.attrs.columns) ? (n!.attrs.columns as { name: string }[]).map((c) => c.name) : [];
+  return cols.length ? ` · columns: ${cols.slice(0, 12).join(", ")}${cols.length > 12 ? ", …" : ""}` : "";
+};
+
 export function designContext(q: Queries, feature: string, anchor?: string): string {
   const g = q.e.graph;
   const out: string[] = [];
@@ -586,11 +627,15 @@ export function designContext(q: Queries, feature: string, anchor?: string): str
   const words = [...new Set(feature.toLowerCase().match(/[a-z][a-z0-9_]{3,}/g) ?? [])].slice(0, 12);
   const hits = new Map(words.flatMap((w) => q.search(w, undefined, 5)).map((h) => [h.id, h]));
   if (hits.size) {
-    out.push(`## Related code (by name)\n${[...hits.values()].slice(0, 30).map((h) => `- [${TAG[h.kind]}] ${h.name}  id=${h.id}  ${h.repo}/${h.file}:${h.line}`).join("\n")}`);
+    const list = [...hits.values()];
+    out.push(`## Related code (by name)\n${list.slice(0, 15).map((h) => `- [${TAG[h.kind]}] ${h.name}  id=${h.id}  ${h.repo}/${h.file}:${h.line}`).join("\n")}${list.length > 15 ? `\n(+${list.length - 15} more: use search)` : ""}`);
+    // the graph says what is connected, not what the code does: these are the functions to read before proposing a change to them
+    const read = list.filter((h) => h.kind === "Function" || h.kind === "Operation").slice(0, 5);
+    if (read.length) out.push(`## Read these before you propose changes (validation, uniqueness checks, arguments)\n${read.map((h) => `- ${h.name}  ${h.repo}/${h.file}:${h.line}`).join("\n")}`);
     hits.forEach((_, id) => focus.add(id));
   }
   const tables = q.tables().filter((t) => focus.has(t.id) || [...t.readers, ...t.writers].some((r) => focus.has(r.id)));
-  if (tables.length) out.push(`## Tables involved\n${tables.slice(0, 15).map((t) => `- ${t.name} (id ${t.id}): ${t.readers.length} reader(s), ${t.writers.length} writer(s)`).join("\n")}`);
+  if (tables.length) out.push(`## Tables involved\n${tables.slice(0, 15).map((t) => `- ${t.name} (id ${t.id}): ${t.readers.length} reader(s), ${t.writers.length} writer(s)${columnsOf(g.nodes.get(t.id))}`).join("\n")}`);
   const issues = q.e.issues.filter((i) => focus.has(i.nodeId));
   if (issues.length) out.push(`## Open issues on this code\n${formatIssues(issues.slice(0, 15))}`);
   // naming style per repo, so proposed names match what the code already does (and `check --design` can find them later)
@@ -608,10 +653,49 @@ export function designContext(q: Queries, feature: string, anchor?: string): str
   return out.join("\n\n") || "Nothing related found. Ask the user which screen or API the feature starts from.";
 }
 
+// ---------- a diagram drawn on request: boxes and arrows, not a change to the code ----------
+
+export interface DiagramInput {
+  title: string;
+  summary?: string;
+  steps: { key: string; title: string; points?: string[]; code?: string; shape?: "box" | "decision" | "text" }[];
+  arrows: { from: string; to: string }[];
+}
+
+/**
+ * A simplified or custom picture as a design: every step is a free box (a title, then points that explain it), so the checks and the
+ * RFC's change table ignore it. A step may name the real code it stands for; its file and line become the last point, to find it.
+ */
+export function buildDiagram(q: Queries, input: DiagramInput): Design {
+  const keys = new Set(input.steps.map((s) => s.key));
+  if (keys.size !== input.steps.length) throw new Error("Each step needs its own key.");
+  for (const a of input.arrows) if (!keys.has(a.from) || !keys.has(a.to)) throw new Error(`The arrow ${a.from} → ${a.to} names a step that is not in steps.`);
+  return {
+    version: 0, title: input.title, summary: input.summary ?? "", rfc: "", decisions: [], notes: [], updatedAt: "",
+    nodes: input.steps.map((s) => {
+      const node = s.code ? q.resolve(s.code) : null;
+      const points = [...(s.points ?? []), ...(node?.file ? [`${node.repo}/${node.file}:${node.line}`] : [])];
+      return { id: `new:${s.key}`, change: "new" as const, kind: "Box" as const, name: s.title, repo: "", author: "claude" as const, ...(s.shape ? { shape: s.shape } : {}), ...(points.length ? { items: points.map((text) => ({ text: text.slice(0, 300) })) } : {}) };
+    }),
+    edges: input.arrows.map((a, i) => ({ id: `e${i + 1}`, src: `new:${a.from}`, dst: `new:${a.to}`, kind: "calls" as const, change: "new" as const, author: "claude" as const })),
+  };
+}
+
+/** Saves a drawn diagram as a new design (never over an existing one, which may hold your edits) and returns its name. */
+export function saveDiagram(q: Queries, input: DiagramInput): string {
+  const base = `diagram-${input.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 44).replace(/-+$/, "") || "flow"}`;
+  let slug = base;
+  for (let i = 2; existsSync(designFile(q.e.ws, slug)); i++) slug = `${base}-${i}`;
+  saveDesign(q.e.ws, slug, buildDiagram(q, input), "user");
+  return slug;
+}
+
 export const designUsage = `Design JSON: { version, title, status?, summary (the TL;DR, 2–3 lines), rfc (Markdown: only Problem, Goals and non-goals, Proposal, Alternatives considered, Risks and impact, Rollout), decisions: [{question, answer}], nodes, edges, notes }.
 - FlowMap writes the TL;DR numbers, diagram, What changes table, Decisions table and impact itself when the RFC is exported: do not write those sections, and give each changed or new node a one-line "note".
 - Real node: { id: <graph id>, change: "existing" | "changed" | "removed", kind, name, repo }
 - Proposed node: { id: "new:<lowercase-key>", change: "new", kind, name, repo, file?: suggested path, transactional?, guards?: [..], note? }
+- Points inside any node: items: [{ text }]. On a Table, items: [{ text: "ai_job_id uuid", new: true }] are the columns this design adds (a real table's current columns are in the graph).
+- Free element, not code (a step, a decision, a text): { id: "new:<key>", change: "new", kind: "Box", name, shape?: "box" | "decision" | "text", items? }. It is left out of checks and the What changes table. To tie it to code, replace it by the real node (same arrows, move its items over).
 - Edge (only proposed ones): { id, src, dst, kind: calls|renders|requests|handles|reads|writes|calls_external|enqueues|triggers|navigates, change: "new" | "removed" }
 - Model an API as Operation --handles--> Function so the auth / transaction checks apply; a screen as Route --renders--> Component --requests--> Operation.`;
 

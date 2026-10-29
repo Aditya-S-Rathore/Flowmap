@@ -469,7 +469,7 @@ export class Orders1700000000000 {
   assert.deepEqual(Object.fromEntries(orders.relations.map((r) => [r.column, r.indexed])), {
     user_id: true, org_id: true, seller_id: false, buyer_id: false, tenant_id: null, invoice_id: true,
   }, "down() is a rollback; (status, seller_id) doesn't cover seller_id; a later DROP INDEX wins; a runtime table name can't be told; OneToOne is unique");
-  assert.deepEqual(orders.issues.map((i) => i.message), ["orders.seller_id (→ Org) has no index.", "orders.buyer_id (→ Org) has no index."]);
+  assert.deepEqual(orders.issues.filter((i) => i.rule === "missing-fk-index").map((i) => i.message), ["orders.seller_id (→ Org) has no index.", "orders.buyer_id (→ Org) has no index."]);
   assert.ok(issues.includes("missing-fk-index users"));
 
   const mysql = await open("shop/backend", { ...extra, "flowmap.config.mjs": `export default { name: "backend", database: "mysql", plugins: ["nestjs", "typeorm"] };` });
@@ -529,4 +529,34 @@ export class AllErrors {}`,
   e.saveBaseline();
   e.load();
   assert.deepEqual(by("breaking-change"), [], "baseline update records the new API list");
+});
+
+test("feature flags: a function that calls a configured flag check is marked with that flag", async () => {
+  const { e } = await open("shop/backend", {
+    "flowmap.config.mjs": `export default { name: "backend", plugins: ["nestjs", "graphql-sdl", "typeorm", "typeorm-transactional", "bullmq", "http-clients"], flags: [{ call: "isEnabled", arg: 1 }] };`,
+    "src/flagged.ts": `declare const ctx: any;\ndeclare function isEnabled(c: any, name: string): boolean;\nexport function boardVisible() { return isEnabled(ctx, "board"); }\nexport function plain() { return 1; }\n`,
+  });
+  const attrs = (name: string) => [...e.graph.nodes.values()].find((n) => n.name === name)?.attrs;
+  assert.deepEqual(attrs("boardVisible")?.flags, ["board"]);
+  assert.equal(attrs("plain")?.flags, undefined);
+});
+
+test("columns: Prisma lists a model's scalar fields, not its relations; Django and SQLAlchemy list their fields", async () => {
+  const prisma = await open("next-app");
+  const tables = (e: typeof prisma.e) => [...e.graph.nodes.values()].filter((n) => n.kind === "Table");
+  const cols = (e: typeof prisma.e, table: string) => ((tables(e).find((n) => n.name === table)?.attrs.columns ?? []) as { name: string; type: string }[]);
+  assert.ok(cols(prisma.e, "projects").some((c) => c.name === "id") && cols(prisma.e, "projects").length > 1, "the Prisma model lists its fields");
+  for (const t of tables(prisma.e)) for (const r of (t.attrs.relations ?? []) as { to: string }[]) assert.ok(!cols(prisma.e, t.name).some((c) => c.type.replace(/\W/g, "") === r.to), `${t.name}: a relation to ${r.to} is not a column`);
+  const py = await open("services");
+  const named = tables(py.e).filter((t) => (t.attrs.columns as unknown[] | undefined)?.length);
+  assert.ok(named.length > 0, "Python models list their fields too");
+});
+
+test("columns: a Drizzle table lists its columns", async () => {
+  const { e } = await open("next-app", {
+    "flowmap.config.mjs": `export default { name: "web", plugins: ["next", "prisma", "drizzle", "http-clients"] };`,
+    "src/schema.ts": `import { pgTable, serial, text } from "drizzle-orm/pg-core";\nexport const notes = pgTable("notes", { id: serial("id").primaryKey(), body: text("body").notNull() });\n`,
+  });
+  const notes = [...e.graph.nodes.values()].find((n) => n.kind === "Table" && n.name === "notes");
+  assert.deepEqual(notes?.attrs.columns, [{ name: "id", type: "serial" }, { name: "body", type: "text" }]);
 });

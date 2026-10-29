@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import type {
-  ChangeSet, EdgeKind, EdgeView, ExplainCard, GraphNode, Issue, IssueSummary, NodeKind, NodeView, Overview, PathStep,
+  ChangeSet, DesignNodeView, EdgeKind, EdgeView, ExplainCard, GraphNode, Issue, IssueSummary, NodeKind, NodeView, Overview, PathStep,
   Ref, RuleInfo, SearchHit, Status, Subgraph, TableInfo, Edge,
 } from "@flowmap/core";
 import { gitRoot } from "@flowmap/core";
@@ -342,25 +342,47 @@ export class Queries {
   // ---------- changes ----------
 
   /** What the current branch (plus uncommitted work) touches compared with `base`. */
-  changes(base?: string): ChangeSet {
-    const changedLines = new Map<string, Set<number> | "all">();   // "repo:file" -> lines
+  /**
+   * What a branch touches. With `over`, the graph is a snapshot of `over.head` (see refs.ts): the diff of base...head is read from
+   * the real repo (`gitDirs`) and only the repos named there are compared.
+   */
+  changes(base?: string, over?: { head: string; base: string; gitDirs: Record<string, string> }): ChangeSet {
+    const files = new Map<string, FileChange>();   // "repo:file" -> what the diff did to it
     const repos = this.e.ws.config.repos.map((r) => {
       const ref = base ?? r.base ?? defaultBase(r.path);
+      if (over && !over.gitDirs[r.name]) return { name: r.name, branch: null, base: ref, files: [] };      // read from where it is, not part of this comparison
       try {
-        const files = gitChanges(r.path, ref);
-        for (const [file, lines] of files) changedLines.set(`${r.name}:${file}`, lines);
-        return { name: r.name, branch: branch(r.path), base: ref, files: [...files.keys()] };
+        const found = gitChanges(over?.gitDirs[r.name] ?? r.path, over?.base ?? ref, over?.head);
+        for (const [file, change] of found) files.set(`${r.name}:${file}`, change);
+        return { name: r.name, branch: over ? over.head.slice(0, 12) : branch(r.path), base: ref, files: [...found.keys()] };
       } catch (err: any) {
         return { name: r.name, branch: branch(r.path), base: ref, files: [], error: String(err.message ?? err).split("\n")[0] };
       }
     });
+    const fileOf = (n: GraphNode) => files.get(`${n.repo}:${n.file}`);
     const changed = [...this.g.nodes.values()].filter((n) => {
-      const lines = changedLines.get(`${n.repo}:${n.file}`);
-      if (!lines || !n.file) return false;
+      const lines = n.file ? fileOf(n)?.lines : undefined;
+      if (!lines) return false;
       if (lines === "all") return true;
       for (let l = n.line; l <= n.endLine; l++) if (lines.has(l)) return true;
       return false;
     });
+    // new: all of it was added by this diff (a new function, a new table). changed: something that was there before was touched.
+    const isNew = (n: GraphNode) => {
+      const added = fileOf(n)?.added;
+      if (added === "all") return true;
+      if (!added) return false;
+      for (let l = n.line; l <= Math.max(n.endLine, n.line); l++) if (!added.has(l)) return false;
+      return true;
+    };
+    // the changed lines of each changed node (the diff, not the whole file), kept short
+    const diffs: Record<string, string> = {};
+    for (const n of changed.slice(0, 200)) {
+      const f = fileOf(n);
+      const text = f?.lines === "all" && !f.hunks.length ? "(a new file)" : f?.hunks.filter((h) => h.start + Math.max(h.count, 1) - 1 >= n.line && h.start <= n.endLine).map((h) => h.text).join("\n") ?? "";
+      if (text) diffs[n.id] = text.length > 1500 ? `${text.slice(0, 1500)}\n… (more)` : text;
+    }
+    const status = new Map(changed.map((n) => [n.id, isNew(n) ? "new" as const : "changed" as const]));
 
     const affected = { operations: new Map<string, Ref>(), screens: new Map<string, Ref>(), tables: new Map<string, Ref>(), externals: new Map<string, Ref>() };
     for (const n of changed) {
@@ -377,10 +399,23 @@ export class Queries {
       }
     }
     const changedIds = new Set(changed.map((n) => n.id));
+    // the picture: the changed code, and the screens, APIs, tables and outside services it reaches, with the arrows between them
+    const drawn = new Set([...changedIds].slice(0, 60));
+    for (const list of Object.values(affected)) for (const id of [...list.keys()].slice(0, 40)) drawn.add(id);
+    const graph = {
+      nodes: [...drawn].filter((id) => this.g.nodes.has(id)).map((id): DesignNodeView => ({
+        ...this.view(this.g.nodes.get(id)!), introduced: 0, change: status.get(id) ?? "existing", author: "user",
+      })),
+      edges: [...drawn].flatMap((id) => this.g.outEdges(id).filter((e) => e.dst && drawn.has(e.dst) && !["guarded_by", "decorated_by", "relates"].includes(e.kind)).map((e) => this.edgeView(e))),
+    };
     return {
       base: base ?? repos[0]?.base ?? "",
+      graph,
+      migrations: repos.flatMap((r) => r.files.filter((f) => /migrat/i.test(f)).map((f) => `${r.name}/${f}`)),
+      flags: [...new Set(changed.flatMap((n) => (Array.isArray(n.attrs.flags) ? (n.attrs.flags as string[]) : [])))],
       repos,
-      changed: changed.slice(0, 200).map((n) => this.ref(n.id)),
+      changed: changed.slice(0, 200).map((n) => ({ ...this.ref(n.id), change: status.get(n.id) })),
+      diffs,
       affected: {
         operations: [...affected.operations.values()],
         screens: [...affected.screens.values()],
@@ -390,7 +425,7 @@ export class Queries {
       issues: this.e.issues.filter((i) => {
         if (i.status !== "new") return false;
         if (changedIds.has(i.nodeId) || !i.file) return true;      // not tied to a file (a removed API): always in scope
-        const lines = changedLines.get(`${i.repo}:${i.file}`);
+        const lines = files.get(`${i.repo}:${i.file}`)?.lines;
         return lines === "all" || !!lines?.has(i.line);
       }),
     };
@@ -413,7 +448,7 @@ export function branch(dir: string): string | null {
   }
 }
 
-function defaultBase(dir: string) {
+export function defaultBase(dir: string) {
   try {
     return git(dir, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).trim();
   } catch {
@@ -422,25 +457,36 @@ function defaultBase(dir: string) {
 }
 
 /** Changed files → changed new-side line numbers, for committed (base...HEAD), staged, unstaged and untracked work. */
-export function gitChanges(dir: string, base: string): Map<string, Set<number> | "all"> {
+/** What a diff did to one file: the lines it touched, the lines it only added, and the changed lines themselves. */
+export interface FileChange { lines: Set<number> | "all"; added: Set<number> | "all"; hunks: { start: number; count: number; text: string }[] }
+
+export function gitChanges(dir: string, base: string, head?: string): Map<string, FileChange> {
   if (!gitRoot(dir)) throw new Error("not a git repository");
-  const out = new Map<string, Set<number> | "all">();
-  const mergeBase = git(dir, ["merge-base", base, "HEAD"]).trim();
-  const diff = git(dir, ["diff", "-U0", "--no-color", "--relative", mergeBase]);
-  let file: string | null = null;
+  const out = new Map<string, FileChange>();
+  const mergeBase = git(dir, ["merge-base", base, head ?? "HEAD"]).trim();
+  const diff = git(dir, ["diff", "-U0", "--no-color", "--relative", mergeBase, ...(head ? [head] : [])]);
+  let file: FileChange | null = null;
+  let hunk: FileChange["hunks"][number] | null = null;
+  let created = false;
   for (const line of diff.split("\n")) {
-    if (line.startsWith("+++ ")) {
-      file = line.startsWith("+++ b/") ? line.slice(6) : null;
-      if (file && !out.has(file)) out.set(file, new Set());
+    if (line.startsWith("--- ")) { created = line === "--- /dev/null"; hunk = null; }
+    else if (line.startsWith("+++ ")) {
+      const name = line.startsWith("+++ b/") ? line.slice(6) : null;
+      file = null;
+      if (name) {
+        file = out.get(name) ?? { lines: new Set(), added: created ? "all" : new Set(), hunks: [] };
+        out.set(name, file);
+      }
     } else if (file && line.startsWith("@@")) {
-      const m = /\+(\d+)(?:,(\d+))?/.exec(line);
+      const m = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
       if (!m) continue;
-      const start = Number(m[1]);
-      const count = m[2] === undefined ? 1 : Number(m[2]);
-      const set = out.get(file) as Set<number>;
-      for (let l = start; l < start + Math.max(count, 1); l++) set.add(l);
-    }
+      const [oldCount, start, count] = [m[1] === undefined ? 1 : Number(m[1]), Number(m[2]), m[3] === undefined ? 1 : Number(m[3])];
+      for (let l = start; l < start + Math.max(count, 1); l++) (file.lines as Set<number>).add(l);
+      if (oldCount === 0 && file.added !== "all") for (let l = start; l < start + count; l++) file.added.add(l);       // only added: nothing of it existed before
+      hunk = { start, count, text: line };
+      file.hunks.push(hunk);
+    } else if (hunk && /^[+-]/.test(line)) hunk.text += `\n${line}`;
   }
-  for (const f of git(dir, ["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean)) out.set(f, "all");
+  if (!head) for (const f of git(dir, ["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean)) out.set(f, { lines: "all", added: "all", hunks: [] });
   return out;
 }

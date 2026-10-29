@@ -2,7 +2,8 @@
 
 export type NodeKind =
   | "Route" | "Component" | "ClientCall" | "Operation" | "Schema" | "Function"
-  | "Guard" | "Table" | "External" | "Job" | "Queue";
+  | "Guard" | "Table" | "External" | "Job" | "Queue"
+  | "Box";                // design only: a free element (a step, a decision, a text), not code
 
 export type EdgeKind =
   | "renders" | "calls" | "requests" | "handles" | "guarded_by" | "decorated_by"
@@ -142,6 +143,7 @@ export interface Ref {
   file: string;
   line: number;
   detail?: string;       // e.g. method name, "write", guard source
+  change?: "new" | "changed";      // in a branch comparison: added by the branch, or already there and touched
 }
 
 export interface ExplainCard {
@@ -187,6 +189,10 @@ export interface ChangeSet {
     externals: Ref[];
   };
   issues: Issue[];       // new issues located in changed code
+  diffs: Record<string, string>;   // node id → the changed lines of that node (unified diff, short)
+  migrations: string[];  // changed migration files, as "repo/path"
+  flags: string[];       // feature flags the changed code sits behind
+  graph: { nodes: DesignNodeView[]; edges: EdgeView[] };      // the changed code and what it reaches, to draw (the Changes view of a design, derived from the diff)
 }
 
 export type UiKind =
@@ -346,6 +352,9 @@ export interface Suggestion {
 export type DesignAuthor = "user" | "claude";
 
 /** Real node (graph id) or proposed one (id "new:<key>"). `pending`: added by Claude, waiting for accept / reject. */
+/** One line inside a node: a point in a Box, a column of a table. */
+export interface DesignItem { text: string; new?: boolean }
+
 export interface DesignNode {
   id: string;
   change: "existing" | "new" | "changed" | "removed";
@@ -356,6 +365,10 @@ export interface DesignNode {
   transactional?: boolean;  // proposed: opens a transaction
   guards?: string[];        // proposed: auth guards it will have
   note?: string;
+  items?: DesignItem[];     // points inside the node; on a table: the columns this design adds
+  shape?: "box" | "decision" | "text";   // a Box only
+  w?: number;               // a Box only: the size you drew or dragged it to
+  h?: number;
   x?: number;
   y?: number;
   keep?: boolean;           // you asked to see it (added from search): the Changes and Flow views show it although it is unchanged
@@ -421,7 +434,7 @@ export interface DesignImpact {
   dependents: { id: string; name: string; refs: Ref[] }[];   // what depends on changed / removed nodes
 }
 
-export type DesignNodeView = NodeView & Pick<DesignNode, "change" | "author" | "pending" | "x" | "y" | "pinned" | "note" | "keep"> & {
+export type DesignNodeView = NodeView & Pick<DesignNode, "change" | "author" | "pending" | "x" | "y" | "pinned" | "note" | "items" | "shape" | "w" | "h" | "keep"> & {
   introduced: number;       // issues the design would add on this node (included in issueCount)
   context?: boolean;        // dashboard only: part of the real flow around the changes, not stored in the design
 };
@@ -450,8 +463,6 @@ export interface DesignView {
   edges: DesignEdgeView[];
   stale: string[];          // real nodes no longer in the code
   impact: DesignImpact;
-  chat: DesignChat["messages"];       // the open conversation
-  conversations: ChatSummary[];
 }
 
 /** Claude Code on this machine, for the dashboard's setup checklist. */
@@ -467,7 +478,8 @@ export type ServerEvent =
   | { type: "error"; message: string }
   | { type: "shot"; id: string; ok: boolean; note?: string }
   | { type: "design"; slug: string; version: number }
-  | { type: "chat"; slug: string; text?: string; tool?: string; done?: boolean; error?: string };
+  | { type: "chat"; slug: string; text?: string; tool?: string; done?: boolean; error?: string }
+  | { type: "ui"; action: "flow" | "design" | "page"; id: string };      // the agent moves the dashboard: a flow (node id), a design (slug) or any page (its route, e.g. "changes?base=main&head=x")
 
 /** What the dashboard chat may do: "full" = everything a terminal Claude Code session can; "design" = read code + edit the design only. */
 export type ChatMode = "full" | "design";

@@ -15,13 +15,16 @@ export const prisma: FlowMapPlugin = {
   textExtensions: [".prisma"],
 
   extractText(file, text, ctx) {
+    const models = new Set([...text.matchAll(/^model\s+(\w+)/gm)].map((m) => m[1]));
     for (const m of text.matchAll(/^model\s+(\w+)\s*\{([\s\S]*?)^\}/gm)) {
       const model = m[1];
       const table = /@@map\(\s*"([^"]+)"/.exec(m[2])?.[1] ?? model;
       const line = text.slice(0, m.index).split("\n").length;
       const id = `${ctx.repo.name}:table:${table}`;
       const relations = [...m[2].matchAll(/^\s*\w+\s+(\w+)\??\s+@relation\([^)]*fields:\s*\[(\w+)/gm)].map((r) => ({ to: r[1], column: r[2], indexed: new RegExp(`@@(index|unique|id)\\(\\[\\s*${r[2]}\\b|^\\s*${r[2]}\\s.*@(unique|id)\\b`, "m").test(m[2]) }));
-      ctx.node({ id, kind: "Table", name: table, repo: ctx.repo.name, file, line, keys: [`table:${table}`, `prisma:${lcfirst(model)}`, `entity:${model}`], attrs: { entity: model, relations } });
+      // fields whose type is another model are relations, not columns
+      const columns = [...m[2].matchAll(/^\s*(\w+)\s+(\w+)(\[\])?(\?)?/gm)].filter((c) => !models.has(c[2])).map((c) => ({ name: c[1], type: `${c[2]}${c[3] ?? ""}${c[4] ?? ""}` })).slice(0, 200);
+      ctx.node({ id, kind: "Table", name: table, repo: ctx.repo.name, file, line, keys: [`table:${table}`, `prisma:${lcfirst(model)}`, `entity:${model}`], attrs: { entity: model, relations, columns } });
       for (const r of relations) ctx.edge({ src: id, kind: "relates", dstKey: `entity:${r.to}`, line, attrs: { column: r.column } });
     }
   },
@@ -56,7 +59,10 @@ export const drizzle: FlowMapPlugin = {
       if (!init || !Node.isCallExpression(init) || !DRIZZLE_TABLE.test(init.getExpression().getText())) continue;
       const nameArg = init.getArguments()[0];
       const table = nameArg && Node.isStringLiteral(nameArg) ? nameArg.getLiteralValue() : d.getName();
-      ctx.node({ id: `${ctx.repo.name}:table:${table}`, kind: "Table", name: table, repo: ctx.repo.name, file: ctx.file, line: d.getStartLineNumber(), keys: [`table:${table}`, `drizzle:${d.getName()}`], attrs: { entity: d.getName(), relations: [] } });
+      const shape = init.getArguments()[1];
+      const columns = shape && Node.isObjectLiteralExpression(shape)
+        ? shape.getProperties().flatMap((p) => (Node.isPropertyAssignment(p) ? [{ name: p.getName(), type: /^(\w+)/.exec(p.getInitializer()?.getText() ?? "")?.[1] ?? "" }] : [])).slice(0, 200) : [];
+      ctx.node({ id: `${ctx.repo.name}:table:${table}`, kind: "Table", name: table, repo: ctx.repo.name, file: ctx.file, line: d.getStartLineNumber(), keys: [`table:${table}`, `drizzle:${d.getName()}`], attrs: { entity: d.getName(), relations: [], columns } });
     }
     for (const cs of ctx.calls) {
       if (cs.claimed) continue;

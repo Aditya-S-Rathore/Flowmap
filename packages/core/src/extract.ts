@@ -442,6 +442,19 @@ export function buildFileContext(
   return { ctx, nodes, edges, constants, ui };
 }
 
+/** A function that calls a configured flag check (`useFeatureFlag("board")`) is behind that flag: its node says which. */
+export function markFlags(ctx: FileContext) {
+  if (!ctx.config.flags.length) return;
+  const arg = new Map(ctx.config.flags.map((f) => [f.call, f.arg ?? 0]));
+  for (const cs of ctx.calls) {
+    const at = arg.get(cs.call.getExpression().getText());
+    const a = at === undefined ? undefined : cs.call.getArguments()[at];
+    if (!a) continue;
+    const flag = (Node.isStringLiteral(a) || Node.isNoSubstitutionTemplateLiteral(a) ? a.getLiteralText() : a.getText()).slice(0, 80);
+    cs.fn.node.attrs.flags = [...new Set([...(cs.fn.node.attrs.flags ?? []), flag])];
+  }
+}
+
 /** Edges for call sites no plugin claimed: internal function calls, renders, and well-known external clients. */
 export function emitDefaultEdges(ctx: FileContext, externals: Record<string, string>) {
   const { repo } = ctx;

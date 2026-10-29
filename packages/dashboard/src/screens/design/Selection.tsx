@@ -1,11 +1,11 @@
-import { Bot, Eye, Pencil, StickyNote, Trash2, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { Bot, Eye, Link2, Pencil, Plus, StickyNote, Trash2, X } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { DetailPanel } from "../../components/DetailPanel";
 import { KIND, KindIcon } from "../../components/kind";
 import { EditorLink } from "../../components/refs";
 import { Pill, input } from "../../components/ui";
 import { useApp } from "../../context";
-import type { Design, DesignEdge, DesignEdgeView, DesignNode, DesignNodeView, EdgeKind, NodeKind } from "../../types";
+import type { Design, DesignEdge, DesignEdgeView, DesignItem, DesignNode, DesignNodeView, EdgeKind, NodeKind } from "../../types";
 import { btn, danger, EDGE_KINDS, Field } from "./shared";
 
 /** Everything the panel can do to the design; implemented by the editor. */
@@ -22,6 +22,32 @@ export interface DesignActions {
   decide(id: string, accept: boolean): void;
   setNoteText(id: string, text: string): void;
   deleteNote(id: string): void;
+  link(id: string): void;               // replace a free box by real code (opens search)
+}
+
+/** One line per point (or column): a plain textarea, so adding many is just typing. Blank lines are dropped. */
+function Points({ items, table, onChange }: { items: DesignItem[]; table: boolean; onChange: (items: DesignItem[] | undefined) => void }) {
+  const [text, setText] = useState(items.map((i) => i.text).join("\n"));           // kept here so a new line you just typed is not dropped
+  return (
+    <Field label={table ? "Columns to add" : "Points"} hint={table ? "One per line, e.g. ai_job_id uuid" : "One per line"}>
+      <textarea value={text} rows={4} maxLength={10000} className={`${input} w-full ${table ? "font-mono" : ""}`} placeholder={table ? "ai_job_id uuid" : "e.g. checks the balance"}
+        onChange={(e) => {
+          setText(e.target.value);
+          const lines = e.target.value.split("\n").map((t) => t.trim().slice(0, 300)).filter(Boolean).slice(0, 100);
+          onChange(lines.length ? lines.map((t) => (table ? { text: t, new: true } : { text: t })) : undefined);
+        }} />
+    </Field>
+  );
+}
+
+/** The columns the code has today (a table's card shows the first few). */
+function ColumnsToday({ columns }: { columns: { name: string; type?: string }[] }) {
+  return (
+    <details open={columns.length <= 8} className="text-sm">
+      <summary className="cursor-pointer text-xs font-semibold tracking-wide text-fg-subtle uppercase">Columns today ({columns.length})</summary>
+      <ul className="mt-1.5 space-y-0.5 font-mono text-xs text-fg-muted">{columns.map((c) => <li key={c.name}>{c.name}{c.type ? ` ${c.type}` : ""}</li>)}</ul>
+    </details>
+  );
 }
 
 export function Selection({ id, draft, nodes, edges, act, onClose }: {
@@ -100,6 +126,29 @@ export function Selection({ id, draft, nodes, edges, act, onClose }: {
   const own = draft.nodes.find((n) => n.id === id);
   if (!v) return null;
 
+  // ---- a free box: a step, a decision, a text ----
+  if (own?.kind === "Box") {
+    return (
+      <>
+        {head(own.name, <KindIcon kind="Box" />)}
+        <div className="space-y-4 px-5 pb-5">
+          {suggestion(own)}
+          <Field label="Title">
+            <input value={own.name} onChange={(e) => act.patchNode(own.id, { name: e.target.value })} maxLength={300} className={`${input} w-full`} />
+          </Field>
+          <Field label="Shape">
+            <select value={own.shape ?? "box"} onChange={(e) => act.patchNode(own.id, { shape: e.target.value as DesignNode["shape"] })} className={`${input} w-full`}>
+              <option value="box">Box</option><option value="decision">Decision</option><option value="text">Text</option>
+            </select>
+          </Field>
+          <Points key={own.id} items={own.items ?? []} table={false} onChange={(items) => act.patchNode(own.id, { items })} />
+          <button type="button" onClick={() => act.link(own.id)} title="Search the code and turn this box into the real function, table or API" className={btn}><Link2 className="size-4" aria-hidden /> Link to code…</button>
+          <button type="button" onClick={() => act.hide(own.id)} className={danger}><Trash2 className="size-4" aria-hidden /> Delete this box</button>
+        </div>
+      </>
+    );
+  }
+
   // ---- something new that this design proposes ----
   if (own?.change === "new") {
     return (
@@ -134,6 +183,7 @@ export function Selection({ id, draft, nodes, edges, act, onClose }: {
           <Field label="Auth guards (comma-separated)">
             <input value={own.guards?.join(", ") ?? ""} onChange={(e) => act.patchNode(own.id, { guards: e.target.value.trim() ? e.target.value.split(",").map((s) => s.trim()).filter(Boolean) : undefined })} placeholder="e.g. AuthGuard" className={`${input} w-full`} />
           </Field>
+          <Points key={own.id} items={own.items ?? []} table={own.kind === "Table"} onChange={(items) => act.patchNode(own.id, { items })} />
           <Field label="Note">
             <textarea value={own.note ?? ""} onChange={(e) => act.patchNode(own.id, { note: e.target.value || undefined })} rows={2} maxLength={2000} className={`${input} w-full`} placeholder="Why, constraints, what to reuse…" />
           </Field>
@@ -152,11 +202,12 @@ export function Selection({ id, draft, nodes, edges, act, onClose }: {
       <section className="space-y-3 border-y border-line px-5 py-4">
         {own && suggestion(own)}
         <p className="text-xs font-semibold tracking-wide text-fg-subtle uppercase">In this design</p>
+        {v.kind === "Table" && Array.isArray(v.attrs.columns) && v.attrs.columns.length > 0 && <ColumnsToday columns={v.attrs.columns as { name: string; type?: string }[]} />}
         {change === "existing" && (
           <>
             <p className="text-sm text-fg-muted">This code is only shown for context. Say what the design does to it:</p>
             <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={() => act.modify(id)} className={btn}><Pencil className="size-4" aria-hidden /> Modify it</button>
+              <button type="button" onClick={() => act.modify(id)} className={btn}>{v.kind === "Table" ? <><Plus className="size-4" aria-hidden /> Add a column</> : <><Pencil className="size-4" aria-hidden /> Modify it</>}</button>
               <button type="button" onClick={() => act.removeCode(id)} className={danger}><Trash2 className="size-4" aria-hidden /> Remove it</button>
             </div>
           </>
@@ -166,6 +217,7 @@ export function Selection({ id, draft, nodes, edges, act, onClose }: {
             <Field label="What changes?" hint="Goes into the RFC.">
               <textarea autoFocus value={own?.note ?? ""} onChange={(e) => act.note(id, e.target.value)} rows={3} maxLength={2000} className={`${input} w-full`} placeholder="e.g. also checks the user is not archived" />
             </Field>
+            {own && <Points key={own.id} items={own.items ?? []} table={own.kind === "Table"} onChange={(items) => act.patchNode(own.id, { items })} />}
             <div className="flex flex-wrap gap-2">
               <button type="button" onClick={() => act.keep(id)} className={btn}><Eye className="size-4" aria-hidden /> Not changing it after all</button>
               <button type="button" onClick={() => act.removeCode(id)} className={danger}><Trash2 className="size-4" aria-hidden /> Remove it instead</button>

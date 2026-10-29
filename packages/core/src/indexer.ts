@@ -4,8 +4,9 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, matchesGlob, relative } from "node:path";
 import { ALWAYS_IGNORE } from "./config.ts";
 import { EMBED_EXT, splitComponent } from "./embedded.ts";
-import { buildFileContext, DEFAULT_EXTERNALS, emitDefaultEdges } from "./extract.ts";
+import { buildFileContext, DEFAULT_EXTERNALS, emitDefaultEdges, markFlags } from "./extract.ts";
 import { indexFacts } from "./indexes.ts";
+import { migrationRisks } from "./migrations.ts";
 import { emitPyDefaultEdges, extractPython } from "./python.ts";
 import { createResolver } from "./resolve.ts";
 import { link } from "./linker.ts";
@@ -146,6 +147,7 @@ export function indexWorkspace(ws: Workspace, registry: Map<string, FlowMapPlugi
               resolveImport: (spec) => resolver.resolve(f.path, spec),
             }, embedded?.name);
             for (const p of plugins) p.extract?.(ctx);
+            markFlags(ctx);
             emitDefaultEdges(ctx, externals);
             out = { ...rest, meta: { ...ctx.meta, imports: (ctx.meta.imports as any[]).filter((imp) => resolver.looksInternal(imp.spec)) } };
             project.removeSourceFile(sf);
@@ -161,6 +163,8 @@ export function indexWorkspace(ws: Workspace, registry: Map<string, FlowMapPlugi
           }
           const indexes = indexFacts(f.path, f.text);
           if (indexes.length) out.meta.indexes = indexes;
+          const risks = migrationRisks(f.path, f.text);
+          if (risks.length) out.meta.risks = risks;
           store.writeFile({ repo: repo.name, path: f.path, hash: f.hash, mtime: f.mtime, size: f.size, meta: JSON.stringify(out.meta) }, out.nodes, out.edges, out.constants, out.ui);
         }
       });

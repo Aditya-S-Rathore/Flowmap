@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { GraphEdge, GraphNode } from "./types.ts";
 
-const SCHEMA_VERSION = "4";
+const SCHEMA_VERSION = "6";                 // 5: tables carry their columns, 6: migrations carry their risks
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);

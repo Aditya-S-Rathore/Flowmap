@@ -296,6 +296,36 @@ export const rules: Rule[] = [
     },
   },
   {
+    id: "risky-migration",
+    title: "Migration that can lock a table or fail",
+    description: "A migration builds an index without CONCURRENTLY, adds a NOT NULL column with no default, adds a foreign key that validates under lock, rewrites a table by changing a column type, or uses CONCURRENTLY inside a transaction. (PostgreSQL.)",
+    why: "On a table with rows, each of these either blocks writes while it runs (a plain index build, a validating foreign key, a type change), fails outright (NOT NULL with no default), or fails the whole deploy (CONCURRENTLY cannot run in a transaction). It is usually fine on an empty dev database and only shows up in production.",
+    fix: "Build indexes with CONCURRENTLY and set `transaction = false` on that migration; add NOT NULL columns with a default (or in steps); add foreign keys NOT VALID, then VALIDATE CONSTRAINT; change a column type with a new column and a backfill. A small table can skip it: `// flowmap-ignore risky-migration: <reason>`.",
+    severity: "warn",
+    run(g, config) {
+      const say = {
+        "index-locks": (t: string | null) => `The index on ${t} is built without CONCURRENTLY: writes to the table wait until it finishes.`,
+        "not-null-no-default": (t: string | null) => `A NOT NULL column is added to ${t} with no default: this fails when the table has rows.`,
+        "fk-validates": (t: string | null) => `The foreign key on ${t} is validated while the table is locked. Add it NOT VALID, then VALIDATE CONSTRAINT.`,
+        "type-rewrite": (t: string | null) => `Changing a column type on ${t} rewrites the whole table under a lock.`,
+        "concurrent-in-tx": () => "CREATE INDEX CONCURRENTLY cannot run inside a transaction, and this migration runs in one (set `transaction = false`).",
+      };
+      const found: Finding[] = [];
+      for (const [key, meta] of g.fileMeta) {
+        const [repo, file] = key.split("\0");
+        if (!meta.risks || (config.repos.find((r) => r.name === repo)?.database && !/postgres/i.test(config.repos.find((r) => r.name === repo)!.database!))) continue;
+        for (const risk of meta.risks as { rule: keyof typeof say; table: string | null; line: number }[]) {
+          const table = risk.table && [...g.nodes.values()].find((n) => n.kind === "Table" && n.repo === repo && n.name === risk.table);
+          found.push({
+            nodeId: table ? table.id : `${repo}:table:${risk.table ?? file}`, detail: `${risk.rule}|${file}|${risk.table ?? ""}`,
+            message: say[risk.rule](risk.table), file, line: risk.line, ...(risk.rule === "concurrent-in-tx" ? { severity: "error" as const } : {}),
+          });
+        }
+      }
+      return found;
+    },
+  },
+  {
     id: "breaking-change",
     title: "API removed",
     description: "An API recorded in the committed baseline no longer exists.",

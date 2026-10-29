@@ -2,10 +2,12 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod";
 import type { Engine } from "./engine.ts";
-import { formatArchitecture, formatExplain, formatIssues, formatMap, formatPaths, formatRefs, formatTree, setColor } from "./format.ts";
+import { formatArchitecture, formatChanges, formatExplain, formatIssues, formatMap, formatPaths, formatRefs, formatTree, setColor } from "./format.ts";
 import { MapQueries } from "./map.ts";
 import { Queries } from "./queries.ts";
-import { designContext, designUsage, designView, readDesign, saveDesign, toMarkdown, toMermaid } from "./designs.ts";
+import { pageNav, sendNav } from "./nav.ts";
+import { changesBetween } from "./refs.ts";
+import { designContext, designUsage, designView, readDesign, saveDesign, saveDiagram, toMarkdown, toMermaid } from "./designs.ts";
 
 const SLUG = z.string().describe("Design name: lowercase letters, digits and dashes (e.g. archive-users).");
 const TARGET = z.string().describe("Name or id: an API (setNickname), a function (UserService.remove), a screen path (/settings/billing), a component or a table (users).");
@@ -38,6 +40,72 @@ export async function serveMcp(engine: Engine) {
     fresh();
     const hits = q.search(query, kind?.split(",") as any, 20);
     return text(hits.map((h) => `[${h.kind}] ${h.name}  ${h.repo}/${h.file}:${h.line}`).join("\n") || "No matches.", { hits });
+  });
+
+  // for the dashboard's agent: the chat runner turns these calls into "show this" events; here they only confirm
+  server.registerTool("show_flow", {
+    title: "Show a flow on the dashboard",
+    description: "Put the flow diagram of a screen, API, function or table on the user's FlowMap dashboard. Use it when the user asks to see or trace something.",
+    inputSchema: z.object({ target: TARGET }),
+    annotations: { readOnlyHint: true },
+  }, async ({ target }) => {
+    const node = find(target);
+    sendNav(engine, { type: "ui", action: "flow", id: node.id });
+    return text(`Showing ${node.name} on the dashboard (it moves if \`flowmap dev\` is running).`);
+  });
+
+  server.registerTool("go_to", {
+    title: "Take the dashboard to a page",
+    description: "Move the user's dashboard to a page when they ask to see or go somewhere: overview · map (screens, APIs, jobs, services) · explore (a flow: give `target`) · issues (optionally `rule`, `severity`, `search`) · rules · changes (optionally `base` and `head`: two branches) · tables · designs (optionally `slug`).",
+    inputSchema: z.object({
+      page: z.enum(["overview", "map", "explore", "issues", "rules", "changes", "tables", "designs"]),
+      target: z.string().optional().describe("explore: the screen, API, function or table to show."),
+      slug: z.string().optional().describe("designs: which design."),
+      base: z.string().optional().describe("changes: what to compare against."),
+      head: z.string().optional().describe("changes: the branch to review."),
+      rule: z.string().optional().describe("issues: a rule id."),
+      severity: z.enum(["error", "warn"]).optional(),
+      search: z.string().optional().describe("issues: text to search for."),
+    }),
+    annotations: { readOnlyHint: true },
+  }, async (args) => {
+    const nav = pageNav(engine, args);
+    if (!nav) throw new Error("Not a page of the dashboard.");
+    sendNav(engine, nav);
+    return text(`Opened ${args.page} on the dashboard (it moves if \`flowmap dev\` is running).`);
+  });
+
+  server.registerTool("draw_diagram", {
+    title: "Draw a diagram on the dashboard",
+    description: "Draw something in the user's own format as an editable diagram (boxes with points, and arrows), saved as a new design that opens on their canvas: a simpler view of a flow with fewer steps, a process, a comparison, before and after. Not for changes to the code (use design_save for those). Keep it small: at most 8 steps, one to three short points each. A step can name the real code it stands for.",
+    inputSchema: z.object({
+      title: z.string().min(1).max(80).describe("What the diagram shows."),
+      summary: z.string().max(500).optional().describe("One or two lines: what to take from it."),
+      steps: z.array(z.object({
+        key: z.string().regex(/^[a-z0-9-]{1,40}$/).describe("A short id, used by the arrows."),
+        title: z.string().min(1).max(80),
+        points: z.array(z.string().max(200)).max(5).optional().describe("Short lines explaining the step."),
+        code: z.string().optional().describe("A screen, API, function or table this step stands for; its file and line are added."),
+        shape: z.enum(["box", "decision", "text"]).optional().describe("decision: a question with branches."),
+      })).min(1).max(15),
+      arrows: z.array(z.object({ from: z.string(), to: z.string() })).max(30),
+    }),
+  }, async (input) => {
+    fresh();
+    const slug = saveDiagram(q, input);
+    sendNav(engine, { type: "ui", action: "design", id: slug });
+    return text(`Drew "${input.title}" as design ${slug}. It opens on the user's dashboard for them to edit (if \`flowmap dev\` is running); change it later with design_get and design_save.`, { slug });
+  });
+
+  server.registerTool("open_design", {
+    title: "Open a design on the dashboard",
+    description: "Open a saved design (after design_save) on the user's dashboard.",
+    inputSchema: z.object({ slug: z.string() }),
+    annotations: { readOnlyHint: true },
+  }, async ({ slug }) => {
+    readDesign(engine.ws, slug);                                     // must exist
+    sendNav(engine, { type: "ui", action: "design", id: slug });
+    return text(`Opened design ${slug} on the dashboard (it moves if \`flowmap dev\` is running).`);
   });
 
   server.registerTool("trace", {
@@ -111,6 +179,20 @@ export async function serveMcp(engine: Engine) {
   }, async ({ view, filter }) => {
     fresh();
     return text(view === "services" ? formatArchitecture(m.architecture()) : formatMap(m.appMap(), view, filter));
+  });
+
+  server.registerTool("changes", {
+    title: "What a branch touches",
+    description: "For a review or before a release: the code a branch changed, the screens, APIs and tables that reach, new issues, migrations and feature flags. Pass `head` to review a branch without checking it out (and without touching your working folder).",
+    inputSchema: z.object({
+      base: z.string().optional().describe("What to compare against (default: the repo's base branch)."),
+      head: z.string().optional().describe("Branch, tag or commit to review. Omitted: your working folder."),
+    }),
+    annotations: { readOnlyHint: true },
+  }, async ({ base, head }) => {
+    fresh();
+    const cs = head ? await changesBetween(engine, base, head) : q.changes(base);
+    return text(formatChanges(cs), { changed: cs.changed.length, migrations: cs.migrations, flags: cs.flags });
   });
 
   server.registerTool("check", {

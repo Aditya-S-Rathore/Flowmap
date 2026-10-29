@@ -1,5 +1,6 @@
-import { BookOpen, CircleAlert, Command as CommandIcon, Database, DraftingCompass, GitBranch, GitCompare, LayoutDashboard, Map as MapIcon, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, TriangleAlert, Waypoints, Workflow, type LucideIcon } from "lucide-react";
+import { BookOpen, Bot, CircleAlert, Command as CommandIcon, Database, DraftingCompass, GitBranch, GitCompare, LayoutDashboard, Map as MapIcon, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, TriangleAlert, Waypoints, Workflow, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useAgent } from "./agent";
 import { get, subscribe } from "./api";
 import { CommandPalette } from "./components/CommandPalette";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -13,6 +14,7 @@ import { FlowView } from "./screens/FlowView";
 import { Issues } from "./screens/Issues";
 import { Overview } from "./screens/Overview";
 import { Rules } from "./screens/Rules";
+import { ChatPanel } from "./screens/design/ChatPanel";
 import { Tables } from "./screens/Tables";
 import type { SearchHit, Status } from "./types";
 
@@ -111,6 +113,36 @@ export function App() {
   const id = rest.length ? decodeURIComponent(rest.join("/")) : undefined;
   const active = NAV.some(([r]) => r === route) ? route : "overview";
 
+  // the agent is on every page; what you are looking at goes along with each question
+  const page = active === "designs" && id ? `the design "${id}" (slug ${id}: change it with design_save, slug "${id}")` : id ? `${active} › ${id}` : active;
+  const agent = useAgent(page, notify);
+  const [agentOpen, setAgentOpen] = usePersisted("flowmap.agent", false);
+  // the agent's width: drag its left edge (or use the arrow keys on it); remembered
+  const clampW = (w: number) => Math.round(Math.min(Math.max(w, 320), Math.min(900, innerWidth * 0.6)));
+  const [agentW, setAgentW] = useState(() => clampW(Number(store.get("flowmap.agent.width")) || 384));
+  const grab = (e: React.PointerEvent) => {
+    const [from, start] = [e.clientX, agentW];
+    let width = start;
+    const move = (m: PointerEvent) => { width = clampW(start + from - m.clientX); setAgentW(width); };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.userSelect = "";
+      store.set("flowmap.agent.width", String(width));
+    };
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  const nudge = (e: React.KeyboardEvent) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const width = clampW(agentW + (e.key === "ArrowLeft" ? 24 : -24));
+    setAgentW(width);
+    store.set("flowmap.agent.width", String(width));
+  };
+  const agentApi = { ...agent, send: (text: string) => { setAgentOpen(true); return agent.send(text); } };
+
   const nav = NAV.map(([r, label, Icon]) => (
     <a key={r} href={`#/${r}`} aria-current={active === r ? "page" : undefined} title={label}
       className={`flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm ${navCollapsed ? "md:justify-center md:px-0" : ""} ${active === r ? "bg-muted font-medium text-fg" : "text-fg-muted hover:bg-muted hover:text-fg"}`}>
@@ -119,7 +151,7 @@ export function App() {
   ));
 
   return (
-    <AppCtx.Provider value={{ status, editor, version, openPalette, setPick: choosePick, notify }}>
+    <AppCtx.Provider value={{ status, editor, version, openPalette, setPick: choosePick, notify, agent: agentApi }}>
       <div className="flex h-dvh">
         <aside className={`hidden shrink-0 flex-col border-r border-line bg-subtle md:flex ${navCollapsed ? "md:w-14" : "md:w-60"}`}>
           <div className={`flex items-center ${navCollapsed ? "flex-col gap-3 px-2 pt-4 pb-3" : "justify-between px-4 pt-5 pb-3"}`}>
@@ -171,6 +203,10 @@ export function App() {
                   <option value="cursor">Cursor</option>
                 </select>
               </label>
+              <button type="button" onClick={() => setAgentOpen(!agentOpen)} aria-pressed={agentOpen} title="Ask the agent: trace a flow, check an impact, design a feature"
+                className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm hover:bg-muted ${agentOpen ? "bg-muted text-fg" : "text-fg-muted hover:text-fg"}`}>
+                <Bot className="size-4" aria-hidden />Agent{agent.streaming && <span className="size-1.5 animate-pulse rounded-full bg-accent" aria-label="working" />}
+              </button>
               <button type="button" onClick={toggleTheme} aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}
                 className="rounded-md p-1.5 text-fg-muted hover:bg-muted hover:text-fg">
                 {dark ? <Sun className="size-4" aria-hidden /> : <Moon className="size-4" aria-hidden />}
@@ -188,7 +224,7 @@ export function App() {
                   {active === "map" && <AppMap key={query} params={new URLSearchParams(query)} />}
                   {active === "issues" && <Issues key={query} params={new URLSearchParams(query)} />}
                   {active === "rules" && <Rules />}
-                  {active === "changes" && <Changes />}
+                  {active === "changes" && <Changes key={query} params={new URLSearchParams(query)} />}
                   {active === "tables" && <Tables />}
                   {active === "designs" && <Designs />}
                 </div>
@@ -196,6 +232,15 @@ export function App() {
             </ErrorBoundary>
           </main>
         </div>
+        {agentOpen && (
+          <div className="fixed inset-0 z-30 flex md:static md:z-auto md:w-[var(--agent-w)] md:shrink-0" style={{ "--agent-w": `${agentW}px` } as React.CSSProperties}>
+            <div role="separator" aria-orientation="vertical" aria-label="Resize the agent: drag, or use the arrow keys" aria-valuenow={agentW} tabIndex={0} onPointerDown={grab} onKeyDown={nudge}
+              className="hidden w-1 shrink-0 cursor-col-resize touch-none bg-line transition-colors hover:bg-accent focus-visible:bg-accent md:block" />
+            <ChatPanel messages={agent.messages} conversations={agent.conversations} streaming={agent.streaming} mode={agent.mode} onMode={agent.setMode}
+              model={agent.model} onModel={agent.setModel} design={active === "designs" && !!id} onSend={agent.send} onStop={agent.stop} onNew={agent.newConversation}
+              onOpen={agent.openConversation} onDelete={agent.deleteConversation} onClear={agent.clearConversations} onClose={() => setAgentOpen(false)} />
+          </div>
+        )}
       </div>
 
       <CommandPalette open={paletteOpen} onOpenChange={(o) => { setPaletteOpen(o); if (!o) setOneShot(undefined); }} onPick={oneShot?.fn ?? pick?.fn} />

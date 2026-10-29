@@ -114,7 +114,11 @@ function djangoModels(ctx: PyFileContext) {
     const relations = [...cls.fields.entries()]
       .map(([name, f]) => ({ name, m: /(ForeignKey|OneToOneField)\(\s*["']?([\w.]+)/.exec(f.value) }))
       .filter((r) => r.m).map((r) => ({ to: last(r.m![2]), column: `${r.name}_id`, indexed: !/db_index\s*=\s*False/.test(cls.fields.get(r.name)!.value) }));   // Django indexes foreign keys itself
-    ctx.node({ id, kind: "Table", name: table, repo: ctx.repo.name, file: ctx.file, line: cls.line, keys: [`table:${table}`, `entity:${cls.name}`], attrs: { entity: cls.name, relations } });
+    const columns = [...cls.fields.entries()].flatMap(([name, f]) => {
+      const m = /\b(\w*Field|ForeignKey)\(/.exec(f.value);
+      return m ? [{ name: m[1] === "ForeignKey" ? `${name}_id` : name, type: m[1] }] : [];
+    }).slice(0, 200);
+    ctx.node({ id, kind: "Table", name: table, repo: ctx.repo.name, file: ctx.file, line: cls.line, keys: [`table:${table}`, `entity:${cls.name}`], attrs: { entity: cls.name, relations, columns } });
     for (const r of relations) ctx.edge({ src: id, kind: "relates", dstKey: `entity:${r.to}`, line: cls.line, attrs: { column: r.column, optional: true } });
   }
 }
@@ -241,7 +245,11 @@ export const sqlalchemy: FlowMapPlugin = {
         return fk ? [{ to: fk[1], column: name, indexed: /\b(index|unique|primary_key)\s*=\s*True/.test(f.value) }] : [];
       });
       const id = `${ctx.repo.name}:table:${table}`;
-      ctx.node({ id, kind: "Table", name: table, repo: ctx.repo.name, file: ctx.file, line: cls.line, keys: [`table:${table}`, `entity:${cls.name}`], attrs: { entity: cls.name, relations } });
+      const columns = [...cls.fields.entries()].flatMap(([name, f]) => {
+        const m = /\b(?:Column|mapped_column|Field)\(\s*([A-Za-z_]\w*)?/.exec(f.value);
+        return m ? [{ name, type: m[1] && /^[A-Z]/.test(m[1]) ? m[1] : "" }] : [];
+      }).slice(0, 200);
+      ctx.node({ id, kind: "Table", name: table, repo: ctx.repo.name, file: ctx.file, line: cls.line, keys: [`table:${table}`, `entity:${cls.name}`], attrs: { entity: cls.name, relations, columns } });
       for (const r of relations) ctx.edge({ src: id, kind: "relates", dstKey: `table:${r.to}`, line: cls.line, attrs: { column: r.column } });
     }
       const entityArg = (n: PyNode | undefined) => n?.type === "identifier" && /^[A-Z]/.test(n.text) ? n.text : n?.type === "call" && /^[A-Z]\w*$/.test(n.childForFieldName("function")!.text) ? n.childForFieldName("function")!.text : null;

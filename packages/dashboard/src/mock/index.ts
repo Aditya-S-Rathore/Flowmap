@@ -1,4 +1,4 @@
-import type { Design, DesignView, WireNode, Wireframe, AppMap, Architecture, ChangeSet, Counts, EdgeView, ExplainCard, Issue, IssueSummary, NodeView, Overview, Ref, SearchHit, ServerEvent, Status, Subgraph, Suggestion, TableInfo } from "../types";
+import type { Design, DesignChat, DesignView, WireNode, Wireframe, AppMap, Architecture, ChangeSet, Counts, EdgeView, ExplainCard, Issue, IssueSummary, NodeView, Overview, Ref, SearchHit, ServerEvent, Status, Subgraph, Suggestion, TableInfo } from "../types";
 import { changedFiles, edges, issues, nodes, repos, rules } from "./data";
 
 const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -168,6 +168,8 @@ function changes(base: string): ChangeSet {
     base,
     repos: repos.map((r) => ({ name: r.name, branch: r.branch, base, files: files(r.name) })),
     changed: changed.map((n) => ref(n)),
+    migrations: [], flags: [], diffs: {},
+    graph: { nodes: [...affected.values()].map((n) => ({ ...n, introduced: 0, change: changed.includes(n) ? "changed" as const : "existing" as const, author: "user" as const })), edges: edges.filter((e) => affected.has(e.src) && affected.has(e.dst ?? "")) },
     affected: { operations: of(["Operation"]), screens: of(["Route"]), tables: of(["Table"]), externals: of(["External"]) },
     issues: issues.filter((i) => i.status === "new" && changed.some((n) => n.file === i.file && n.repo === i.repo)),
   };
@@ -283,7 +285,9 @@ export async function mockGet(url: string): Promise<unknown> {
     case "architecture": return architecture();
     case "suggestions": return suggestions;
     case "changes": return changes(p.get("base") || "origin/main");
-    case "claude": return { version: "2.1.0", signedIn: true, plugin: false };
+    case "chat": return { chat: chats.get(rest[0]) ?? [], conversations: [{ id: "c-1", title: chats.get(rest[0])?.[0]?.text.slice(0, 60) || "New conversation", updatedAt: new Date().toISOString(), count: chats.get(rest[0])?.length ?? 0, active: true }] };
+    case "branches": return { branches: ["origin/main", "feat/addon-seats", "develop"], current: "feat/addon-seats", base: "origin/main" };
+    case "claude": return rest[0] === "commands" ? [{ name: "plan", description: "Make a plan before coding" }, { name: "research", description: "Check everything before answering" }] : { version: "2.1.0", signedIn: true, plugin: false };
     case "designs": {
       if (!rest.length) return [...designs].map(([slug, d]) => ({ slug, title: d.title, summary: d.summary, version: d.version, updatedAt: d.updatedAt, pending: d.nodes.filter((n) => n.pending).length }));
       const d = designs.get(rest[0]);
@@ -303,14 +307,13 @@ const designs = new Map<string, Design>([["archive-users", {
     .concat([{ id: "new:archive", change: "new" as const, kind: "Operation", name: "mutation archiveUser", repo: "backend", author: "claude" as const, pending: true, x: 960, y: 0 } as any]),
   edges: [], notes: [{ id: "n1", text: "Keep the history visible to admins", x: 0, y: -140, author: "user" }], decisions: [], updatedAt: new Date().toISOString(),
 }]]);
-const chats = new Map<string, DesignView["chat"]>();
+const chats = new Map<string, DesignChat["messages"]>();
 const listeners = new Set<(e: ServerEvent) => void>();
 
 function designView(slug: string, d: Design): DesignView {
   const ids = new Set(d.nodes.map((n) => n.id));
   return {
-    slug, design: d, stale: [], chat: chats.get(slug) ?? [],
-    conversations: [{ id: "c-1", title: chats.get(slug)?.[0]?.text.slice(0, 60) || "New conversation", updatedAt: new Date().toISOString(), count: chats.get(slug)?.length ?? 0, active: true }],
+    slug, design: d, stale: [],
     nodes: d.nodes.map((n) => ({ ...(byId.get(n.id) ?? { id: n.id, kind: n.kind, name: n.name, repo: n.repo, file: n.file ?? "", line: 0, transactional: false, inTx: false, issueCount: 0, maxSeverity: null, outCount: 0, inCount: 0, group: n.repo, attrs: {} }), change: n.change, author: n.author, pending: n.pending, x: n.x, y: n.y, note: n.note, introduced: 0 })),
     edges: edges.filter((e) => ids.has(e.src) && ids.has(e.dst)),
     impact: { introduced: issues.filter((i) => ids.has(i.nodeId)).slice(0, 2), resolved: [], tables: [], dependents: [] },
@@ -319,8 +322,9 @@ function designView(slug: string, d: Design): DesignView {
 
 export async function mockPost(url: string, body: any): Promise<unknown> {
   await new Promise((r) => setTimeout(r, 150));
-  const [, slug, chat] = /^\/api\/designs(?:\/([^/]+)(\/chat)?)?$/.exec(url) ?? [];
-  if (chat && (body.cancel || body.new || body.open || body.remove)) return body.cancel ? { stopped: false } : {};
+  if (url.endsWith("/delete")) { designs.delete(url.split("/")[3]); return {}; }
+  const [, slug, chat] = /^\/api\/designs(?:\/([^/]+)(\/chat)?)?$/.exec(url === "/api/agent/chat" ? "/api/designs/agent-chat/chat" : url) ?? [];
+  if (chat && (body.cancel || body.new || body.open || body.remove || body.clear)) return body.cancel ? { stopped: false } : {};
   if (chat) {
     chats.set(slug, [...(chats.get(slug) ?? []), { role: "user", text: body.text }]);
     listeners.forEach((l) => l({ type: "chat", slug, tool: "Read src/user/user.service.ts" }));

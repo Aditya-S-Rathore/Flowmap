@@ -10,6 +10,7 @@ export const BASELINE_FILE = "flowmap.baseline.json";
 
 export const DEFAULTS: Omit<FlowMapConfig, "name" | "repos" | "warnings"> = {
   clients: [],
+  flags: [],
   externals: {},
   afterCommit: ["runOnTransactionCommit", "runOnTransactionComplete", "on_commit"],
   ignore: [],
@@ -55,6 +56,7 @@ async function loadConfigFile(path: string): Promise<FlowMapConfig> {
   let repos: RepoConfig[];
   let externals = { ...raw.externals };
   let clients = [...(raw.clients ?? [])];
+  let flags = [...(raw.flags ?? [])];
 
   if (raw.repos) {
     repos = raw.repos.map((r: RepoConfig) => ({ ...r, path: resolve(dir, expandHome(r.path)), plugins: r.plugins ?? [] }));
@@ -71,10 +73,11 @@ async function loadConfigFile(path: string): Promise<FlowMapConfig> {
       repos.push({ ...repoFrom(o, other), connected: true });
       externals = { ...o.externals, ...externals };
       clients = [...clients, ...(o.clients ?? [])];
+      flags = [...flags, ...(o.flags ?? [])];
     }
   }
   repos = repos.map((r) => ({ ...r, database: r.database ?? detectDatabase(r.path) }));
-  return { ...DEFAULTS, ...raw, name: raw.name ?? basename(dir), repos, externals, clients, warnings };
+  return { ...DEFAULTS, ...raw, name: raw.name ?? basename(dir), repos, externals, clients, flags, warnings };
 }
 
 function findUp(start: string): string | null {

@@ -1,15 +1,13 @@
-import { Bot, Check, ChevronRight, History, Loader2, MessageSquarePlus, Mic, Send, ShieldAlert, Square, Trash2, Wrench, X } from "lucide-react";
+import { Bot, ChevronRight, History, Loader2, MessageSquarePlus, Mic, Send, ShieldAlert, Square, Trash2, Wrench, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useApi } from "../../api";
-import { CollapseButton } from "../../components/Collapsible";
+import type { Streaming } from "../../agent";
 import { Markdown } from "../../components/Markdown";
 import { input } from "../../components/ui";
-import type { ChatMode, ChatSummary, ClaudeStatus, DesignView } from "../../types";
+import type { ChatMode, ChatSummary, ClaudeStatus, DesignChat } from "../../types";
 import { ClaudeSetup } from "./ClaudeSetup";
 import { Popover, type Point } from "./Menus";
 import { ago, primary } from "./shared";
-
-export interface Streaming { text: string[]; tools: string[] }
 
 const QUICK = [
   ["Draft the RFC", "Draft the RFC for this design."],
@@ -42,10 +40,11 @@ function Steps({ tools, live = false }: { tools: string[]; live?: boolean }) {
 }
 
 /** Every conversation about this design: open one to carry on where you left off. */
-function HistoryMenu({ at, list, busy, onOpen, onDelete, onNew, onClose }: {
-  at: Point; list: ChatSummary[]; busy: boolean; onOpen: (id: string) => void; onDelete: (id: string) => void; onNew: () => void; onClose: () => void;
+function HistoryMenu({ at, list, busy, onOpen, onDelete, onClear, onNew, onClose }: {
+  at: Point; list: ChatSummary[]; busy: boolean; onOpen: (id: string) => void; onDelete: (id: string) => void; onClear: () => void; onNew: () => void; onClose: () => void;
 }) {
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
   const hint = busy ? "Wait for Claude to finish" : undefined;
   return (
     <Popover at={at} label="Conversation history" width="w-80" onClose={onClose}>
@@ -71,17 +70,27 @@ function HistoryMenu({ at, list, busy, onOpen, onDelete, onNew, onClose }: {
         <button type="button" role="menuitem" disabled={busy} title={hint} onClick={() => { onNew(); onClose(); }} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted disabled:opacity-40">
           <MessageSquarePlus className="size-4 text-fg-muted" aria-hidden />New conversation
         </button>
+        {list.some((c) => c.count > 0) && (clearing ? (
+          <button type="button" role="menuitem" disabled={busy} onClick={() => { onClear(); onClose(); }} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm font-medium text-error hover:bg-error-soft disabled:opacity-40">
+            <Trash2 className="size-4" aria-hidden />Delete everything for good?
+          </button>
+        ) : (
+          <button type="button" role="menuitem" disabled={busy} title={hint ?? "Delete every conversation from this computer"} onClick={() => setClearing(true)} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-error hover:bg-muted disabled:opacity-40">
+            <Trash2 className="size-4" aria-hidden />Delete all conversations
+          </button>
+        ))}
       </div>
     </Popover>
   );
 }
 
-export function ChatPanel({ messages, conversations, streaming, mode, onMode, model, onModel, pending, onSend, onStop, onNew, onOpen, onDelete, onAcceptAll, onRejectAll, onCollapse }: {
-  messages: DesignView["chat"]; conversations: ChatSummary[]; streaming: Streaming | null; mode: ChatMode; onMode: (m: ChatMode) => void; model: string; onModel: (m: string) => void; pending: number;
-  onSend: (text: string) => void; onStop: () => void; onNew: () => void; onOpen: (id: string) => void; onDelete: (id: string) => void;
-  onAcceptAll: () => void; onRejectAll: () => void; onCollapse: () => void;
+export function ChatPanel({ messages, conversations, streaming, mode, onMode, model, onModel, design, onSend, onStop, onNew, onOpen, onDelete, onClear, onClose }: {
+  messages: DesignChat["messages"]; conversations: ChatSummary[]; streaming: Streaming | null; mode: ChatMode; onMode: (m: ChatMode) => void; model: string; onModel: (m: string) => void; design: boolean;
+  onSend: (text: string) => void; onStop: () => void; onNew: () => void; onOpen: (id: string) => void; onDelete: (id: string) => void; onClear: () => void; onClose: () => void;
 }) {
   const { data: claude } = useApi<ClaudeStatus>("/api/claude");
+  const { data: skills } = useApi<{ name: string; description: string }[]>("/api/claude/commands");
+  const [pick, setPick] = useState(0);
   const [text, setText] = useState("");
   const [history, setHistory] = useState<Point | null>(null);
   const end = useRef<HTMLDivElement>(null);
@@ -103,14 +112,18 @@ export function ChatPanel({ messages, conversations, streaming, mode, onMode, mo
   // a block body: scrollIntoView returns a Promise in current browsers, and React would treat a returned value as the cleanup function
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [messages.length, streaming?.text.length, streaming?.tools.length]);
   const ready = !!claude?.version && claude.signedIn;
+  // "/" at the start (and no space yet) offers your skills and commands
+  const slash = /^\/([\w:.-]*)$/.exec(text);
+  const matches = slash ? (skills ?? []).filter((s) => s.name.startsWith(slash[1])).slice(0, 8) : [];
+  const choose = (name: string) => { setText(`/${name} `); setPick(0); box.current?.focus(); };
   const busy = streaming !== null;
   const send = (t: string) => { if (t.trim() && !busy) { onSend(t.trim()); setText(""); } };
 
   return (
-    <aside aria-label="Chat with Claude" className="absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden border-r border-line bg-bg md:static md:z-auto md:w-80 lg:w-96">
+    <aside aria-label="Agent" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-bg">
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
         <Bot className="size-4 text-accent" aria-hidden />
-        <span className="text-sm font-medium">Claude</span>
+        <span className="text-sm font-medium">Agent</span>
         <select value={mode} onChange={(e) => onMode(e.target.value as ChatMode)} aria-label="What Claude may do" className="rounded-md border border-line bg-bg px-1.5 py-0.5 text-xs">
           <option value="full">Full access</option>
           <option value="design">Design only</option>
@@ -128,7 +141,7 @@ export function ChatPanel({ messages, conversations, streaming, mode, onMode, mo
             {conversations.length > 1 && <span className="absolute -top-0.5 -right-0.5 rounded-full bg-accent px-1 text-[0.625rem] leading-4 font-medium text-bg">{conversations.length}</span>}
           </button>
           <button type="button" onClick={onNew} disabled={busy || !messages.length} aria-label="New conversation" title={messages.length ? "New conversation (this one stays in History)" : "Already a new conversation"} className="rounded-md p-1 text-fg-muted hover:bg-muted hover:text-fg disabled:opacity-40"><MessageSquarePlus className="size-4" aria-hidden /></button>
-          <CollapseButton side="left" onClick={onCollapse} label="chat" />
+          <button type="button" onClick={onClose} aria-label="Close the agent" title="Close" className="rounded-md p-1 text-fg-muted hover:bg-muted hover:text-fg"><X className="size-4" aria-hidden /></button>
         </span>
       </div>
       <p className={`flex items-center gap-1.5 border-b border-line px-3 py-1 text-xs ${mode === "full" ? "text-warn" : "text-fg-subtle"}`}
@@ -143,8 +156,8 @@ export function ChatPanel({ messages, conversations, streaming, mode, onMode, mo
         {claude && !ready && <ClaudeSetup compact />}
         {ready && !messages.length && !streaming && (
           <div className="space-y-2 text-sm text-fg-muted">
-            <p>Describe the feature. Claude reads the code, gives you a short overview of the current flow and the decisions to make, then draws the design on the canvas for you to accept or change.</p>
-            <p className="text-xs text-fg-subtle">For example: “Let admins archive a user; archived users can't sign in.”</p>
+            <p>Ask about your code and it answers from the real flow, and shows it: “how is a nickname saved?”, “what does this API touch?”. Or describe a feature and it designs it with you.</p>
+            <p className="text-xs text-fg-subtle">For example: “Show me how a nickname is saved” or “Design: let admins archive a user.”</p>
             <p>Already have a rough RFC? <button type="button" onClick={() => { setText(DRAFT); box.current?.focus(); }} className="text-accent hover:underline">Import a draft</button>, then paste it below the line.</p>
           </div>
         )}
@@ -170,25 +183,32 @@ export function ChatPanel({ messages, conversations, streaming, mode, onMode, mo
         <div ref={end} />
       </div>
 
-      {pending > 0 && !busy && (
-        <div className="flex items-center gap-2 border-t border-line bg-accent-soft px-3 py-2 text-xs text-accent">
-          <span className="min-w-0 flex-1">Claude suggested {pending} change{pending === 1 ? "" : "s"} on the canvas</span>
-          <button type="button" onClick={onAcceptAll} className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-medium hover:bg-bg"><Check className="size-3.5" aria-hidden />Accept all</button>
-          <button type="button" onClick={onRejectAll} className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-bg"><X className="size-3.5" aria-hidden />Reject all</button>
-        </div>
-      )}
-
       <form onSubmit={(e) => { e.preventDefault(); send(text); }} className="shrink-0 border-t border-line p-3">
-        {ready && messages.length > 0 && !busy && (
+        {ready && design && messages.length > 0 && !busy && (
           <div className="mb-2 flex flex-wrap gap-1.5">
             {QUICK.map(([label, prompt]) => (
               <button key={label} type="button" onClick={() => send(prompt)} className="rounded-full border border-line px-2.5 py-0.5 text-xs text-fg-muted hover:border-accent hover:text-accent">{label}</button>
             ))}
           </div>
         )}
+        {matches.length > 0 && (
+          <ul role="listbox" aria-label="Skills and commands" className="mb-2 max-h-56 overflow-y-auto rounded-lg border border-line bg-bg py-1 text-sm shadow-lg">
+            {matches.map((s, i) => (
+              <li key={s.name} role="option" aria-selected={i === pick}>
+                <button type="button" onClick={() => choose(s.name)} className={`flex w-full items-baseline gap-2 px-3 py-1.5 text-left hover:bg-muted ${i === pick ? "bg-muted" : ""}`}>
+                  <span className="font-medium">/{s.name}</span><span className="truncate text-xs text-fg-subtle">{s.description}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <div className="flex items-end gap-2">
           <textarea ref={box} value={text} onChange={(e) => setText(e.target.value)} rows={2} maxLength={20000} disabled={!ready}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(text); } }}
+            onKeyDown={(e) => {
+              if (matches.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); setPick((i) => (i + (e.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length); }
+              else if (matches.length && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey))) { e.preventDefault(); choose(matches[Math.min(pick, matches.length - 1)].name); }
+              else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(text); }
+            }}
             placeholder={ready ? "Describe the feature or ask for a change…" : "Set up Claude to chat"} aria-label="Message to Claude"
             className={`${input} max-h-48 min-w-0 flex-1 resize-none`} />
           {SpeechRecognition && (
@@ -199,7 +219,7 @@ export function ChatPanel({ messages, conversations, streaming, mode, onMode, mo
         </div>
         <p className="mt-1 text-xs text-fg-subtle">Enter to send · Shift+Enter for a new line</p>
       </form>
-      {history && <HistoryMenu at={history} list={conversations} busy={busy} onOpen={onOpen} onDelete={onDelete} onNew={onNew} onClose={() => setHistory(null)} />}
+      {history && <HistoryMenu at={history} list={conversations} busy={busy} onOpen={onOpen} onDelete={onDelete} onClear={onClear} onNew={onNew} onClose={() => setHistory(null)} />}
     </aside>
   );
 }

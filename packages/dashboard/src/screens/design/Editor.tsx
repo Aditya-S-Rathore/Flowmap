@@ -1,5 +1,5 @@
 import {
-  ArrowLeft, Bot, Check, Copy, Download, FileText, LayoutGrid, Maximize2, Minimize2, Pencil, Plus, Redo2, Search, TriangleAlert, Trash2, Undo2, X,
+  ArrowLeft, Check, Copy, Download, FileText, LayoutGrid, Maximize2, Minimize2, Pencil, Plus, Redo2, Search, TriangleAlert, Trash2, Undo2, X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { enc, get, getText, post, subscribe, useApi } from "../../api";
@@ -7,19 +7,18 @@ import { Collapsible } from "../../components/Collapsible";
 import { ErrorState, Skeleton, card } from "../../components/ui";
 import { useApp } from "../../context";
 import { diagramSvg, pngBlob } from "../../graph/diagramSvg";
-import { DesignGraph, type IssueFilter, type Pos } from "../../graph/DesignGraph";
+import { DesignGraph, type IssueFilter, type Pos, type Rect, type Tool } from "../../graph/DesignGraph";
 import { NODE_H, NODE_W } from "../../graph/layout";
 import { usePersisted } from "../../persist";
 import { zip } from "../../zip";
 import type {
-  ChatMode, Design, DesignEdge, DesignEdgeView, DesignFlow, DesignNode, DesignNodeView, DesignView, NodeKind, SearchHit,
+  Design, DesignEdge, DesignEdgeView, DesignFlow, DesignNode, DesignNodeView, DesignView, NodeKind, SearchHit,
 } from "../../types";
-import { ChatPanel, type Streaming } from "./ChatPanel";
 import { ContextMenu, QuickAdd, type MenuItem } from "./Menus";
 import { Selection, type DesignActions } from "./Selection";
 import { SidePanel, type Tab } from "./SidePanel";
 import { btn, download, guessEdge, key, newId, primary } from "./shared";
-import { changesKeep, DIAGRAM_MARKER, flowKeep, isChange, summarize, trim, visibleDesignNodes, type ViewMode } from "../../../../core/src/design-view";
+import { changesKeep, DIAGRAM_MARKER, flowKeep, isChange, isSketch, summarize, trim, visibleDesignNodes, type ViewMode } from "../../../../core/src/design-view";
 
 /** What the canvas shows. The hints are what the buttons promise, in plain words. */
 const VIEWS: [ViewMode, string, string][] = [
@@ -35,7 +34,7 @@ const plainId = (id: string | null) => (id && !id.startsWith("edge:") && !id.sta
 const hash = (s: string) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 
 export function DesignEditor({ slug }: { slug: string }) {
-  const { version, setPick, openPalette, notify, status } = useApp();
+  const { version, setPick, openPalette, notify, status, agent } = useApp();
   const [view, setView] = useState<DesignView>();
   const [draft, setDraft] = useState<Design>();
   const [error, setError] = useState<string>();
@@ -47,16 +46,12 @@ export function DesignEditor({ slug }: { slug: string }) {
   const [picked, setPicked] = useState<ViewMode | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [revealed, setRevealed] = useState<Set<string>>(new Set());          // nodes whose folded neighbours ("+N") are open
+  const [tool, setTool] = useState<Tool>("select");                    // a shape tool: drag on the canvas to draw it
   const [fitTick, setFitTick] = useState(0);
   const [quick, setQuick] = useState<{ client: Pos; flow?: Pos; from?: string; reverse?: boolean } | null>(null);
   const [menu, setMenu] = useState<{ id: string; client: Pos } | null>(null);
-  const [streaming, setStreaming] = useState<Streaming | null>(null);     // null: Claude isn't answering
-  const [mode, setMode] = useState<ChatMode>(() => { try { return localStorage.getItem("flowmap.chatMode") === "design" ? "design" : "full"; } catch { return "full"; } });
-  const [model, setModel] = useState(() => { try { return localStorage.getItem("flowmap.chatModel") ?? ""; } catch { return ""; } });
-  const [chatOpen, setChatOpen] = usePersisted("flowmap.design.chat", true);
   const [sideOpen, setSideOpen] = usePersisted("flowmap.design.side", true);
   const [hist, setHist] = useState({ undo: 0, redo: 0 });
-  const was = useRef({ chat: true, side: true });
   const getCenter = useRef<(() => Pos) | null>(null);
   // the latest draft lives in a ref so saves and quick successive edits never use a stale copy
   const cur = useRef<Design>(undefined);
@@ -156,16 +151,8 @@ export function DesignEditor({ slug }: { slug: string }) {
 
   useEffect(() => subscribe((e) => {
     if (e.type === "design" && e.slug === slug && e.version > (cur.current?.version ?? 0)) load();
-    if (e.type === "chat" && e.slug === slug) {
-      if (e.text) setStreaming((s) => ({ text: [...(s?.text ?? []), e.text!], tools: s?.tools ?? [] }));
-      if (e.tool) setStreaming((s) => ({ text: s?.text ?? [], tools: [...(s?.tools ?? []), e.tool!] }));
-      if (e.done) {
-        setStreaming(null);
-        if (e.error) notify(`Claude: ${e.error}`, true);
-        load();
-      }
-    }
-  }), [slug, load, notify]);
+    if (e.type === "chat" && e.done) load();            // the agent may have edited this design
+  }), [slug, load]);
 
   // ---- what is drawn ----
   // The view: a design that already changes something opens on its changes, a new one on the flow. After that it's your choice.
@@ -193,7 +180,7 @@ export function DesignEditor({ slug }: { slug: string }) {
       const known = server.get(n.id) ?? flowNodes.get(n.id);
       const base = known ?? { id: n.id, kind: n.kind, name: n.name, repo: n.repo, file: n.file ?? "", line: 0, transactional: false, inTx: false, issueCount: 0, maxSeverity: null, outCount: 0, inCount: 0, group: n.repo, attrs: {} };
       const own = n.change === "new" ? { kind: n.kind, name: n.name, repo: n.repo, file: n.file ?? "", transactional: !!n.transactional } : {};
-      return { introduced: 0, ...base, ...own, context: undefined, change: n.change, author: n.author, pending: n.pending, x: n.x, y: n.y, pinned: n.pinned, note: n.note, keep: n.keep };
+      return { introduced: 0, ...base, ...own, context: undefined, change: n.change, author: n.author, pending: n.pending, x: n.x, y: n.y, pinned: n.pinned, note: n.note, items: n.items, shape: n.shape, w: n.w, h: n.h, keep: n.keep };
     });
     const inDesign = new Set(mine.map((n) => n.id));
     const context = (ctx?.nodes ?? []).filter((n) => !inDesign.has(n.id)).map((n): DesignNodeView => ({ ...n, introduced: 0, change: "existing", author: "user", context: true }));
@@ -274,14 +261,16 @@ export function DesignEditor({ slug }: { slug: string }) {
     return () => setPick(undefined);
   }, [setPick, addReal]);
 
-  const addNode = useCallback((kind: NodeKind, name: string, o: { from?: string; at?: Pos; reverse?: boolean } = {}) => {
+  const addNode = useCallback((kind: NodeKind, name: string, o: { from?: string; at?: Pos; reverse?: boolean; shape?: DesignNode["shape"]; rect?: Rect } = {}) => {
     const id = newId();
     const from = o.from ? viewOf(o.from) : undefined;
-    const repo = kind === "External" ? "" : from?.repo || latest.current.draft?.nodes.find((n) => n.repo)?.repo || status?.repos[0]?.name || "";
+    const repo = kind === "External" || kind === "Box" ? "" : from?.repo || latest.current.draft?.nodes.find((n) => n.repo)?.repo || status?.repos[0]?.name || "";
     const at = o.at ?? (from ? undefined : getCenter.current?.());          // with nothing to attach to, drop it in the middle of the view
     update((d) => {
       let next = o.from ? ensure(d, o.from) : d;
-      next = { ...next, nodes: [...next.nodes, { id, change: "new", kind, name, repo, author: "user", ...(at ? { x: Math.round(at.x - NODE_W / 2), y: Math.round(at.y - NODE_H / 2), pinned: true } : {}) }] };
+      next = { ...next, nodes: [...next.nodes, { id, change: "new", kind, name, repo, author: "user", ...(o.shape ? { shape: o.shape } : {}),
+        ...(o.rect ? { x: Math.round(o.rect.x), y: Math.round(o.rect.y), w: Math.round(o.rect.w), h: Math.round(o.rect.h), pinned: true }
+          : at ? { x: Math.round(at.x - NODE_W / 2), y: Math.round(at.y - NODE_H / 2), pinned: true } : {}) }] };
       if (from) {
         const [src, dst] = o.reverse ? [id, from.id] : [from.id, id];
         const edge: DesignEdge = { id: key("e"), src, dst, kind: guessEdge(o.reverse ? kind : from.kind, o.reverse ? from.kind : kind), change: "new", author: "user" };
@@ -312,7 +301,26 @@ export function DesignEditor({ slug }: { slug: string }) {
     ? { ...d, notes: d.notes.map((n) => (`note:${n.id}` === id ? { ...n, ...p } : n)) }
     : mapNode(ensure(d, id), id, (n) => ({ ...n, ...p, pinned: true }))), [update]);                  // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** Replaces a free box by the code it stands for: its arrows, points and place move to that node. */
+  const link = (boxId: string, h: SearchHit) => update((d) => {
+    const box = d.nodes.find((n) => n.id === boxId);
+    if (!box) return d;
+    const withReal = ensure(d, h.id, h);
+    const edges = withReal.edges.map((e) => ({ ...e, src: e.src === boxId ? h.id : e.src, dst: e.dst === boxId ? h.id : e.dst })).filter((e) => e.src !== e.dst);
+    const nodes = withReal.nodes.filter((n) => n.id !== boxId).map((n) => {
+      if (n.id !== h.id) return n;
+      const items = [...(n.items ?? []), ...(box.items ?? []).map((i) => ({ ...i, ...(n.kind === "Table" ? { new: true } : {}) }))];
+      return { ...n, keep: true, note: n.note ?? box.note, ...(box.pinned ? { x: box.x, y: box.y, pinned: true } : {}), ...(items.length ? { items } : {}) };
+    });
+    return edges.filter((e) => e.change === "new").reduce((acc, e) => markChanging(acc, e.src), { ...withReal, nodes, edges });
+  });
+
+  const onDraw = useCallback((shape: Exclude<Tool, "select">, rect: Rect) =>
+    addNode("Box", shape === "decision" ? "Decision?" : shape === "text" ? "Text" : "Step", { shape, rect }), [addNode]);
+  const onResize = useCallback((id: string, r: Rect) => update((d) => mapNode(d, id, (n) => ({ ...n, x: r.x, y: r.y, w: r.w, h: r.h, pinned: true }))), [update]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   const act = useMemo<DesignActions>(() => ({
+    link: (id) => openPalette((h) => { link(id, h); select(h.id); }),
     modify: (id) => update((d) => mapNode(ensure(d, id), id, (n) => ({ ...n, change: "changed" }))),
     keep: (id) => update((d) => mapNode(d, id, (n) => ({ ...n, change: "existing" }))),
     removeCode: (id) => update((d) => mapNode(ensure(d, id), id, (n) => ({ ...n, change: "removed" }))),
@@ -354,6 +362,7 @@ export function DesignEditor({ slug }: { slug: string }) {
     } else if (d?.nodes.some((n) => n.id === id)) act.hide(id);
   }, [selected, act, notify]);
 
+  const SHORTCUTS: Record<string, Tool> = { v: "select", r: "box", d: "decision", t: "text" };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isTyping(e.target) || document.querySelector("[cmdk-dialog]")) return;
@@ -363,33 +372,19 @@ export function DesignEditor({ slug }: { slug: string }) {
       else if (mod && k === "y") { e.preventDefault(); redo(); }
       else if (e.key === "Delete" || e.key === "Backspace") { if (selected) { e.preventDefault(); deleteSelected(); } }
       else if (e.key === "F2") { const n = latest.current.draft?.nodes.find((x) => x.id === selected); if (n?.change === "new") { e.preventDefault(); setEditing(n.id); } }
-      else if (e.key === "Escape") { setQuick(null); setMenu(null); setEditing(null); setSelected(null); }
+      else if (e.key === "Escape") { setQuick(null); setMenu(null); setEditing(null); setSelected(null); setTool("select"); }
+      else if (!mod && !e.altKey && SHORTCUTS[k]) setTool(SHORTCUTS[k]);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [undo, redo, selected, deleteSelected]);
 
-  // ---- chat ----
-  const send = async (text: string) => {
-    await save();                 // Claude reads the design from disk: give it the latest
-    setStreaming({ text: [], tools: [] });
-    try {
-      await post(`/api/designs/${enc(slug)}/chat`, { text, mode, model });
-      load();
-    } catch (e: any) {
-      setStreaming(null);
-      notify(`Claude: ${e.message}`, true);
-    }
-  };
-  const stop = () => post(`/api/designs/${enc(slug)}/chat`, { cancel: true }).catch((e: Error) => notify(`Couldn't stop: ${e.message}`, true));
-  const chatAction = (body: object, what: string) => post(`/api/designs/${enc(slug)}/chat`, body).then(load, (e: Error) => notify(`Couldn't ${what}: ${e.message}`, true));
-  const newConversation = () => chatAction({ new: true }, "start a new conversation");
-  const openConversation = (id: string) => chatAction({ open: id }, "open that conversation");
-  const deleteConversation = (id: string) => chatAction({ remove: id }, "delete that conversation");
-  const changeMode = (m: ChatMode) => {
-    setMode(m);
-    try { localStorage.setItem("flowmap.chatMode", m); } catch { /* storage unavailable */ }
-  };
+  // the agent (one panel for the whole dashboard) reads the design from disk: give it the latest first
+  useEffect(() => {
+    if (!agent) return;
+    agent.flush.current = save;
+    return () => { agent.flush.current = null; };
+  }, [agent, save]);
 
   // ---- export: the RFC text, the diagram as a picture, and a bundle of both ----
   const rfcText = async () => { await save(); return getText(`/api/designs/${enc(slug)}/export?format=md`); };
@@ -418,18 +413,16 @@ export function DesignEditor({ slug }: { slug: string }) {
     ]],
   ];
 
-  const focus = !chatOpen && !sideOpen;
-  const toggleFocus = () => {
-    if (focus) { setChatOpen(was.current.chat); setSideOpen(was.current.side); }
-    else { was.current = { chat: chatOpen, side: sideOpen }; setChatOpen(false); setSideOpen(false); }
-  };
+  const focus = !sideOpen;
+  const toggleFocus = () => setSideOpen(focus);
 
   if (error && !draft) return <div className="p-8"><ErrorState error={error} onRetry={load} /></div>;
   if (!draft || !shown) return <div className="flex h-full items-center justify-center gap-6" aria-busy="true" aria-label="Loading design">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-20 w-64" />)}</div>;
 
   const pending = draft.nodes.filter((n) => n.pending).length + draft.edges.filter((e) => e.pending).length;
   const changed = draft.nodes.filter((n) => n.change !== "existing").length;
-  const summary = summarize(draft.nodes);
+  const boxes = draft.nodes.filter(isSketch).length;
+  const summary = summarize(draft.nodes) || (boxes ? `${boxes} box${boxes === 1 ? "" : "es"}` : "");           // a diagram has no code changes to count
   const introduced = view?.impact.introduced.length ?? 0;
   const flowNote = !found ? (flowError ? "Couldn't load the flow" : "Loading the flow…")
     : found.from.length ? `Flows from ${found.from.slice(0, 3).map((r) => r.name).join(" · ")}${found.from.length > 3 ? ` +${found.from.length - 3}` : ""}`
@@ -515,17 +508,20 @@ export function DesignEditor({ slug }: { slug: string }) {
       </div>
 
       <div className="relative flex min-h-0 flex-1">
-        <Collapsible side="left" open={chatOpen} onOpenChange={setChatOpen} label="Claude" icon={Bot} badge={pending > 0 ? <span className="absolute top-0.5 right-0.5 size-2 rounded-full bg-accent" /> : undefined}>
-          <ChatPanel messages={view?.chat ?? []} conversations={view?.conversations ?? []} streaming={streaming} mode={mode} onMode={changeMode} model={model} onModel={(m) => { setModel(m); try { localStorage.setItem("flowmap.chatModel", m); } catch { /* storage unavailable */ } }} pending={pending}
-            onSend={send} onStop={stop} onNew={newConversation} onOpen={openConversation} onDelete={deleteConversation} onAcceptAll={acceptAll} onRejectAll={rejectAll} onCollapse={() => setChatOpen(false)} />
-        </Collapsible>
-
         <div className="relative min-w-0 flex-1">
+          {pending > 0 && (
+            <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border border-accent/40 bg-accent-soft px-3 py-1 text-xs text-accent shadow-sm">
+              Claude suggested {pending} change{pending === 1 ? "" : "s"}
+              <button type="button" onClick={acceptAll} className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-medium hover:bg-bg"><Check className="size-3.5" aria-hidden />Accept all</button>
+              <button type="button" onClick={rejectAll} className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-bg"><X className="size-3.5" aria-hidden />Reject all</button>
+            </div>
+          )}
           <DesignGraph nodes={shown.nodes} edges={shown.edges} notes={draft.notes} selected={selected} editing={editing} filter={filter}
             collapsed={collapsed} fitKey={`${viewMode}|${ctx?.nodes.length ?? "-"}|${fitTick}`} getCenter={getCenter} folded={shown.folded} opened={revealed} onReveal={onReveal}
             onSelect={select} onMove={onMove} onConnect={onConnect} onDecide={onDecide} onRename={onRename} onStopEdit={onStopEdit}
             onToggleGroup={onToggleGroup} onEditNode={(id) => { if (draft.nodes.find((n) => n.id === id)?.change === "new") setEditing(id); else select(id); }}
-            onQuickAdd={setQuick} onContextMenu={(id, client) => setMenu({ id, client })} />
+            onQuickAdd={setQuick} onContextMenu={(id, client) => setMenu({ id, client })}
+            tool={tool} onTool={setTool} onDraw={onDraw} onResize={onResize} />
           {!shown.nodes.length && !draft.notes.length && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
               <div className={`${card} pointer-events-auto max-w-md p-5 text-center shadow-lg`}>
@@ -547,7 +543,7 @@ export function DesignEditor({ slug }: { slug: string }) {
         <Collapsible side="right" open={sideOpen} onOpenChange={setSideOpen} label="Impact & RFC" icon={FileText}
           badge={introduced > 0 ? <span className="absolute top-0.5 right-0.5 size-2 rounded-full bg-warn" /> : undefined}>
           <SidePanel slug={slug} tab={selected ? tab : tab === "selection" ? "impact" : tab} setTab={setTab} hasSelection={!!selected}
-            view={view} draft={draft} update={update} onSend={send} claudeBusy={streaming !== null} flush={save} onCollapse={() => setSideOpen(false)}>
+            view={view} draft={draft} update={update} onSend={(t) => void agent?.send(t)} claudeBusy={!!agent?.streaming} flush={save} onCollapse={() => setSideOpen(false)}>
             {selected && <Selection id={selected} draft={draft} nodes={shown.nodes} edges={shown.edges} act={act} onClose={() => setSelected(null)} />}
           </SidePanel>
         </Collapsible>
@@ -556,6 +552,7 @@ export function DesignEditor({ slug }: { slug: string }) {
       {quick && (
         <QuickAdd at={quick.client} fromName={quick.from ? nameOf(quick.from) : undefined} onClose={() => setQuick(null)}
           onKind={(kind, name) => addNode(kind, name, { from: quick.from, at: quick.flow, reverse: quick.reverse })}
+          onShape={(shape) => addNode("Box", shape === "decision" ? "Decision?" : shape === "text" ? "Text" : "Step", { from: quick.from, at: quick.flow, reverse: quick.reverse, shape })}
           onExisting={() => openPalette()} onNote={() => addNote(quick.flow)} />
       )}
       {menu && <ContextMenu at={menu.client} items={menuItems(menu.id)} onClose={() => setMenu(null)} />}

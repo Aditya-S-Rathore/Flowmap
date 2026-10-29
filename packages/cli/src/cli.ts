@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { detectDeps, gitRoot, ignoreIndex } from "@flowmap/core";
 import { builtinPlugins } from "@flowmap/plugins";
 import { Engine } from "./engine.ts";
+import { changesBetween } from "./refs.ts";
 import { Queries } from "./queries.ts";
 import { MapQueries } from "./map.ts";
 import { formatArchitecture, formatChanges, formatDesignCheck, formatExplain, formatIssues, formatIssuesMarkdown, formatMap, formatPaths, formatRefs, formatSuggestions, formatTree, setColor } from "./format.ts";
@@ -33,7 +34,7 @@ Explore
 Review
   check [--all|--new] [--base <ref>] [--format text|json|md]   new issues (default: in changed code)
   check --design <name> [--base <ref>]               does the code match the design? (planned, unplanned, new issues)
-  changes [--base <ref>]                             what your branch affects
+  changes [--base <ref>] [--head <ref>]              what your branch affects; with --head, compares two branches without checking either out
   baseline update                                    accept current issues as the baseline
   doctor                                             index health and accuracy report
 
@@ -56,6 +57,7 @@ const { values: opts, positionals } = parseArgs({
     all: { type: "boolean" },
     new: { type: "boolean" },
     base: { type: "string" },
+    head: { type: "string" },
     design: { type: "string" },
     format: { type: "string", default: "text" },
     connect: { type: "string", multiple: true },
@@ -156,8 +158,8 @@ async function main() {
       return console.log(q.search(args.join(" "), undefined, 30).map((h) => `[${h.kind}] ${h.name}  ${h.repo}/${h.file}:${h.line}`).join("\n") || "No matches.");
     }
     case "changes": {
-      const q = new Queries(await engine());
-      return console.log(formatChanges(q.changes(opts.base)));
+      const e = await engine();
+      return console.log(formatChanges(opts.head ? await changesBetween(e, opts.base, opts.head) : new Queries(e).changes(opts.base)));
     }
     case "check": return check();
     case "baseline": {
