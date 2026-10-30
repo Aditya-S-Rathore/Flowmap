@@ -344,11 +344,11 @@ export class Queries {
   /** What the current branch (plus uncommitted work) touches compared with `base`. */
   /**
    * What a branch touches. With `over`, the graph is a snapshot of `over.head` (see refs.ts): the diff of base...head is read from
-   * the real repo (`gitDirs`) and only the repos named there are compared.
+   * the real repo (`gitDirs`) and only the repos named there are compared. `only` limits the comparison to those repos (by name).
    */
-  changes(base?: string, over?: { head: string; base: string; gitDirs: Record<string, string> }): ChangeSet {
+  changes(base?: string, over?: { head: string; base: string; gitDirs: Record<string, string> }, only?: ReadonlySet<string>): ChangeSet {
     const files = new Map<string, FileChange>();   // "repo:file" -> what the diff did to it
-    const repos = this.e.ws.config.repos.map((r) => {
+    const repos = this.e.ws.config.repos.filter((r) => !only || only.has(r.name)).map((r) => {
       const ref = base ?? r.base ?? defaultBase(r.path);
       if (over && !over.gitDirs[r.name]) return { name: r.name, branch: null, base: ref, files: [] };      // read from where it is, not part of this comparison
       try {

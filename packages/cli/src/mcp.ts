@@ -187,12 +187,15 @@ export async function serveMcp(engine: Engine) {
     inputSchema: z.object({
       base: z.string().optional().describe("What to compare against (default: the repo's base branch)."),
       head: z.string().optional().describe("Branch, tag or commit to review. Omitted: your working folder."),
+      includeConnected: z.boolean().optional().describe("Also include the other repos of the workspace. Default: only the repo you work in, so a review is not cluttered by other repos' own changes."),
     }),
     annotations: { readOnlyHint: true },
-  }, async ({ base, head }) => {
+  }, async ({ base, head, includeConnected }) => {
     fresh();
-    const cs = head ? await changesBetween(engine, base, head) : q.changes(base);
-    return text(formatChanges(cs), { changed: cs.changed.length, migrations: cs.migrations, flags: cs.flags });
+    const mine = new Set(engine.ws.config.repos.filter((r) => !r.connected).map((r) => r.name));
+    const left = !includeConnected && mine.size < engine.ws.config.repos.length;
+    const cs = head ? await changesBetween(engine, base, head) : q.changes(base, undefined, includeConnected ? undefined : mine);
+    return text(`${formatChanges(cs)}${left ? "\n\n(Connected repos were left out. Pass includeConnected to include their changes.)" : ""}`, { changed: cs.changed.length, migrations: cs.migrations, flags: cs.flags });
   });
 
   server.registerTool("check", {

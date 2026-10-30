@@ -558,3 +558,9 @@ test("moving the dashboard from outside: only checked places are written or foll
   writeFileSync(join(engine.ws.dir, ".flowmap", "nav.json"), JSON.stringify({ nav: { type: "ui", action: "page", id: "issues" }, at: Date.now() - 60_000 }));
   assert.equal(readNav(engine), null, "an old place is not followed");
 });
+
+test("changes can be limited to the repo you work in, so other repos' own changes stay out of a review", () => {
+  const all = q.changes("HEAD").repos.map((r) => r.name).sort();
+  assert.deepEqual(all, ["backend", "frontend"], "by default every repo of the workspace is compared");
+  assert.deepEqual(q.changes("HEAD", undefined, new Set(["frontend"])).repos.map((r) => r.name), ["frontend"]);
+});

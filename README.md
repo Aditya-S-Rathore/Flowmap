@@ -207,7 +207,7 @@ With MCP your AI tool asks FlowMap instead of reading files: who calls this, is 
 /plugin install flowmap@flowmap
 ```
 
-Restart Claude Code and check that `/mcp` shows **flowmap**. The plugin also adds `/flowmap:flowmap` (use the graph instead of reading large files), `/flowmap:design` (plan a feature) and `/flowmap:review` (review a branch or PR without checking it out), and a Stop hook that asks Claude to fix or explain new error-level issues before it says "done".
+Restart Claude Code and check that `/mcp` shows **flowmap**. The plugin also adds `/flowmap:flowmap` (use the graph instead of reading large files) and `/flowmap:design` (plan a feature), and a Stop hook that asks Claude to fix or explain new error-level issues before it says "done".
 
 **Any other tool that supports MCP** (Cursor, Codex, Gemini CLI…): add this to its MCP settings, with your repo's path. For designs, also paste [the design instructions](claude-plugin/skills/design/SKILL.md) into its rules file. Only Claude Code has been tested.
 
@@ -229,7 +229,7 @@ Restart Claude Code and check that `/mcp` shows **flowmap**. The plugin also add
 | `impact` | "what breaks if I change this?" | Every screen, API and job that depends on it |
 | `reachable` | "can a user reach this? is it behind a flag?" | The paths from screens to it |
 | `check` | "any new issues?" | The rules' findings in code you changed |
-| `changes` | "review `feature/x` against `main`" | What a branch touches, the screens, APIs and tables it reaches, new issues, migrations, feature flags. Give it `head` and nothing is checked out |
+| `changes` | "what does `feature/x` touch compared to `main`?" | What a branch touches, the screens, APIs and tables it reaches, new issues, migrations, feature flags. Give it `head` and nothing is checked out. By default only the repo you work in is covered (`includeConnected` adds the others) |
 | `design_context` | "design: archive users" | The current flow, related code, tables, naming style, what to read first |
 | `design_get` / `design_save` / `design_impact` | (the design flow) | Read, save and check a design; it appears live on the dashboard canvas, additions marked for you to accept |
 | `draw_diagram` | "draw how X works, simple, 6 boxes" | A picture in your own format (boxes with points, arrows), saved as a new design that opens on your canvas to edit, link to code and export. Not a change to the code |
